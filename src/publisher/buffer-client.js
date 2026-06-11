@@ -16,7 +16,7 @@
 //       assets: [AssetInput!]!   (pass [] for text-only)
 //     PostActionPayload = PostActionSuccess { post {...} } | MutationError { message }
 //   AssetInput @oneOf { image | video | document | link }
-//     ImageAssetInput { url: String!, thumbnailUrl: String, metadata: [ImageMetadataInput] }
+//     ImageAssetInput { url: String!, thumbnailUrl: String, metadata: ImageMetadataInput }
 //     ImageMetadataInput { altText: String!, ... }
 //   channels(input: ChannelsInput!) -> [Channel]  (ChannelsInput.organizationId)
 //   posts(input: PostsInput!) -> { edges { node {...} } }  (idempotency lookup)
@@ -148,7 +148,7 @@ function buildImageAsset({ url, thumbnailUrl, altText } = {}) {
   if (!url) throw new BufferError('image asset requires a url', { code: 'CLIENT_ERROR' });
   const image = { url };
   if (thumbnailUrl) image.thumbnailUrl = thumbnailUrl;
-  if (altText) image.metadata = [{ altText }]; // ImageAssetInput.metadata: [ImageMetadataInput]
+  if (altText) image.metadata = { altText }; // ImageAssetInput.metadata: ImageMetadataInput (single object, per live SDL 2026-06-11)
   return { image };
 }
 

@@ -26,7 +26,7 @@ test('image asset uses the NEW format: image -> url + metadata[{altText}]', () =
   // @oneOf: exactly the image variant present
   assert.deepEqual(Object.keys(asset), ['image']);
   assert.equal(asset.image.url, 'https://x/y.jpg');
-  assert.deepEqual(asset.image.metadata, [{ altText: 'a barn' }]);
+  assert.deepEqual(asset.image.metadata, { altText: 'a barn' });
   assert.equal('video' in asset, false);
 });
 
