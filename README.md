@@ -202,3 +202,48 @@ Behind the login. Three thumb-reachable views via a bottom tab bar:
 
 A PWA manifest is included (`/assets/manifest.webmanifest`) so the console can be
 added to a phone home screen — **optional**, not required for mobile access.
+
+The console also has a **Schedule** tab (see Auto-scheduler below).
+
+## Auto-scheduler (content calendar → Buffer, approve-first)
+
+A scheduling layer that reads a content calendar, generates each post with the
+drafter, and pushes the batch to Buffer as **scheduled drafts awaiting your
+approval**. You approve the batch from the **Buffer mobile app** — nothing
+publishes until you do.
+
+- **Calendar:** `src/scheduler/content-calendar.js` — one entry per post
+  (`brand`, `channel`, `metro`, `dayOffset`, `slot`, `brief`). Intentionally
+  editable; add a whole month here. Entries whose channel isn't a registered
+  Buffer channel for the brand are skipped (e.g. `linkedin`/`instagram` until
+  connected).
+- **Slots/timezone:** posting times are Central (`America/Chicago`), DST-aware
+  via `luxon` — `dueAt` carries the correct `-05:00`/`-06:00` offset year-round.
+- **Console → Schedule tab:** brand filter, batch start date, **Preview**
+  (dry-run; shows exactly what *would* be scheduled, no Buffer call, no rows),
+  and **Schedule to Buffer** (pushes the batch). The **Status** tab shows each
+  `scheduled_posts` row's state. Mobile-first.
+- **State:** rows live in `scheduled_posts`
+  (`planned → scheduled → awaiting_approval`, or `failed`/`skipped`), with the
+  Buffer post id stored. Re-running a batch is **idempotent** (same
+  brand+channel+dueAt+copy is skipped, never duplicated). Rate-limit/5xx errors
+  back off and retry, then mark that one row `failed` and continue.
+
+### ⚠️ REQUIRED Buffer-side setting — "Requires Approval"
+
+The approve-first design depends on a Buffer setting the code cannot enforce:
+**set BOTH channels (PropZombie + CrewMando) to "Requires Approval" in Buffer.**
+Verified live: with it **off**, a `customScheduled` post comes back
+`status: scheduled` and **auto-publishes at its time** — the opposite of what you
+want. With it **on**, the post waits in Buffer for your approval. Set it once per
+channel before running a real batch.
+
+### Images are text-only for now (durable hosting needed)
+
+Buffer fetches post media from a public URL that must stay live until the post
+publishes. This service serves uploads from `PUBLIC_BASE_URL/uploads` — **public
+but on Render's ephemeral disk (not durable)**, so a restart between scheduling
+and `dueAt` would break a scheduled image. The scheduler therefore runs
+**text-only** (the sample calendar has no images). To enable scheduled images,
+add durable public hosting (Cloudflare R2 or similar) and serve image URLs from
+there; then set `deps.allowImages` and put `imageUrl` on calendar entries.

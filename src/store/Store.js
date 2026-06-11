@@ -18,6 +18,11 @@
 //   resolveChannelsForBrand(brand)          -> channel[]   ({ id, service, name, displayName })
 //   kvGet(k)                                -> string|null
 //   kvSet(k, v)                             -> void
+//   createScheduledPost(input)              -> scheduledRow   (auto-scheduler)
+//   getScheduledPost(id)                    -> scheduledRow | null
+//   updateScheduledPost(id, patch)          -> scheduledRow
+//   listScheduledPosts({ status, limit })   -> scheduledRow[]
+//   findActiveScheduledByKey(calendarKey)   -> scheduledRow | null  (idempotency)
 //   close()                                 -> void
 //
 // A `post` has the shape produced by mappers.rowToPost: JSON fields parsed

@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { nowIso, rowToPost, postInsertValues, applyPostPatch, POST_COLUMNS } = require('./mappers');
+const { nowIso, newId, rowToPost, postInsertValues, applyPostPatch, POST_COLUMNS, scheduledInsertValues, SCHEDULED_COLUMNS, SCHEDULED_UPDATABLE } = require('./mappers');
 
 // SQLite implementation of the Store interface (see store/index.js for the
 // contract). better-sqlite3 is synchronous; methods are declared `async` so the
@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS channels (
   created_at TEXT NOT NULL, PRIMARY KEY (brand, channel_id)
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS scheduled_posts (
+  id TEXT PRIMARY KEY, brand TEXT NOT NULL, channel TEXT NOT NULL, metro TEXT,
+  due_at TEXT NOT NULL, text TEXT, image_url TEXT, status TEXT NOT NULL DEFAULT 'planned',
+  buffer_post_id TEXT, calendar_key TEXT, error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_posts(status);
+CREATE INDEX IF NOT EXISTS idx_scheduled_key ON scheduled_posts(calendar_key);
 `;
 
 class SqliteStore {
@@ -143,6 +151,39 @@ class SqliteStore {
   }
   async kvSet(k, v) {
     this.db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, v);
+  }
+
+  // ── scheduled_posts ─────────────────────────────────────────────────────
+  async createScheduledPost(input) {
+    const row = scheduledInsertValues(input, nowIso());
+    const named = SCHEDULED_COLUMNS.map((c) => `@${c}`).join(', ');
+    this.db.prepare(`INSERT INTO scheduled_posts (${SCHEDULED_COLUMNS.join(', ')}) VALUES (${named})`).run(row);
+    return this.getScheduledPost(row.id);
+  }
+
+  async getScheduledPost(id) {
+    return this.db.prepare('SELECT * FROM scheduled_posts WHERE id = ?').get(id) || null;
+  }
+
+  async updateScheduledPost(id, patch) {
+    const sets = [];
+    const vals = { id, updated_at: nowIso() };
+    for (const k of Object.keys(patch)) {
+      if (SCHEDULED_UPDATABLE.includes(k)) { sets.push(`${k} = @${k}`); vals[k] = patch[k]; }
+    }
+    sets.push('updated_at = @updated_at');
+    this.db.prepare(`UPDATE scheduled_posts SET ${sets.join(', ')} WHERE id = @id`).run(vals);
+    return this.getScheduledPost(id);
+  }
+
+  async listScheduledPosts({ status, limit = 200 } = {}) {
+    if (status) return this.db.prepare('SELECT * FROM scheduled_posts WHERE status = ? ORDER BY due_at ASC LIMIT ?').all(status, limit);
+    return this.db.prepare('SELECT * FROM scheduled_posts ORDER BY due_at DESC LIMIT ?').all(limit);
+  }
+
+  // Idempotency: an active (awaiting_approval/sent) row for the same calendar key.
+  async findActiveScheduledByKey(calendarKey) {
+    return this.db.prepare("SELECT * FROM scheduled_posts WHERE calendar_key = ? AND status IN ('awaiting_approval','sent') LIMIT 1").get(calendarKey) || null;
   }
 
   async close() {

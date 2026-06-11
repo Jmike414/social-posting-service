@@ -14,6 +14,7 @@ const { createDrafter } = require('./drafter');
 const { BufferPublisher } = require('./publisher/BufferPublisher');
 const { enqueue } = require('./enqueue');
 const worker = require('./worker');
+const scheduler = require('./scheduler/scheduler');
 const { STATES, canTransition } = require('./state');
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
@@ -183,6 +184,31 @@ function createApp(deps) {
   app.post('/api/human/:id/posted', requireAuth, async (req, res) => {
     const row = await store.markHumanPosted(req.params.id);
     res.json({ ok: true, row });
+  });
+
+  // ── Auto-scheduler ───────────────────────────────────────────────────────────
+  app.post('/api/schedule/preview', requireAuth, async (req, res) => {
+    try {
+      const { startDate, brandFilter } = req.body || {};
+      const summary = await scheduler.generateAndScheduleBatch({ startDate, brandFilter, dryRun: true, deps });
+      res.json(summary);
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/schedule/run', requireAuth, async (req, res) => {
+    try {
+      const { startDate, brandFilter } = req.body || {};
+      const summary = await scheduler.generateAndScheduleBatch({ startDate, brandFilter, dryRun: false, deps });
+      res.json(summary);
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/scheduled', requireAuth, async (req, res) => {
+    res.json({ scheduled: await store.listScheduledPosts({ limit: 200 }) });
   });
 
   // Resolve a live link for a published post (best-effort; Buffer hosts the post).

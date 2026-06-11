@@ -1,6 +1,6 @@
 'use strict';
 
-const { nowIso, newId, rowToPost, postInsertValues, applyPostPatch, POST_COLUMNS } = require('./mappers');
+const { nowIso, newId, rowToPost, postInsertValues, applyPostPatch, POST_COLUMNS, scheduledInsertValues, SCHEDULED_COLUMNS, SCHEDULED_UPDATABLE } = require('./mappers');
 
 // Postgres implementation of the Store interface. Works against ANY object that
 // exposes an async `query(text, params) -> { rows }` — a `pg.Pool` in production,
@@ -30,6 +30,14 @@ const DDL = [
     created_at TEXT NOT NULL, PRIMARY KEY (brand, channel_id)
   )`,
   `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)`,
+  `CREATE TABLE IF NOT EXISTS scheduled_posts (
+    id TEXT PRIMARY KEY, brand TEXT NOT NULL, channel TEXT NOT NULL, metro TEXT,
+    due_at TEXT NOT NULL, text TEXT, image_url TEXT, status TEXT NOT NULL DEFAULT 'planned',
+    buffer_post_id TEXT, calendar_key TEXT, error TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_posts(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_scheduled_key ON scheduled_posts(calendar_key)`,
 ];
 
 function placeholders(n, start = 1) {
@@ -152,6 +160,44 @@ class PgStore {
   }
   async kvSet(k, v) {
     await this.pool.query('INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v', [k, v]);
+  }
+
+  // ── scheduled_posts ─────────────────────────────────────────────────────
+  async createScheduledPost(input) {
+    const row = scheduledInsertValues(input, nowIso());
+    await this.pool.query(
+      `INSERT INTO scheduled_posts (${SCHEDULED_COLUMNS.join(', ')}) VALUES (${placeholders(SCHEDULED_COLUMNS.length)})`,
+      SCHEDULED_COLUMNS.map((c) => row[c])
+    );
+    return this.getScheduledPost(row.id);
+  }
+
+  async getScheduledPost(id) {
+    return this._one('SELECT * FROM scheduled_posts WHERE id = $1', [id]);
+  }
+
+  async updateScheduledPost(id, patch) {
+    const cols = Object.keys(patch).filter((k) => SCHEDULED_UPDATABLE.includes(k));
+    const sets = cols.map((c, i) => `${c} = $${i + 1}`);
+    const vals = cols.map((c) => patch[c]);
+    sets.push(`updated_at = $${vals.length + 1}`);
+    vals.push(nowIso());
+    vals.push(id);
+    await this.pool.query(`UPDATE scheduled_posts SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
+    return this.getScheduledPost(id);
+  }
+
+  async listScheduledPosts({ status, limit = 200 } = {}) {
+    if (status) {
+      const { rows } = await this.pool.query('SELECT * FROM scheduled_posts WHERE status = $1 ORDER BY due_at ASC LIMIT $2', [status, limit]);
+      return rows;
+    }
+    const { rows } = await this.pool.query('SELECT * FROM scheduled_posts ORDER BY due_at DESC LIMIT $1', [limit]);
+    return rows;
+  }
+
+  async findActiveScheduledByKey(calendarKey) {
+    return this._one("SELECT * FROM scheduled_posts WHERE calendar_key = $1 AND status IN ('awaiting_approval','sent') LIMIT 1", [calendarKey]);
   }
 
   async close() {

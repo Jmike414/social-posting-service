@@ -79,4 +79,33 @@ const POST_COLUMNS = [
   'created_at', 'updated_at',
 ];
 
-module.exports = { nowIso, newId, rowToPost, postInsertValues, applyPostPatch, POST_JSON_FIELDS, POST_COLUMNS };
+// ── scheduled_posts (the auto-scheduler's own table; plain columns, no JSON) ──
+const SCHEDULED_COLUMNS = [
+  'id', 'brand', 'channel', 'metro', 'due_at', 'text', 'image_url', 'status',
+  'buffer_post_id', 'calendar_key', 'error', 'created_at', 'updated_at',
+];
+
+function scheduledInsertValues(input, ts) {
+  return {
+    id: input.id || newId(),
+    brand: String(input.brand || '').toLowerCase(),
+    channel: input.channel,
+    metro: input.metro ?? null,
+    due_at: input.due_at,
+    text: input.text ?? null,
+    image_url: input.image_url ?? null,
+    status: input.status || 'planned',
+    buffer_post_id: input.buffer_post_id ?? null,
+    calendar_key: input.calendar_key ?? null,
+    error: input.error ?? null,
+    created_at: ts,
+    updated_at: ts,
+  };
+}
+
+const SCHEDULED_UPDATABLE = ['brand', 'channel', 'metro', 'due_at', 'text', 'image_url', 'status', 'buffer_post_id', 'calendar_key', 'error'];
+
+module.exports = {
+  nowIso, newId, rowToPost, postInsertValues, applyPostPatch, POST_JSON_FIELDS, POST_COLUMNS,
+  SCHEDULED_COLUMNS, scheduledInsertValues, SCHEDULED_UPDATABLE,
+};

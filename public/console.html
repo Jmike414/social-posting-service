@@ -131,11 +131,33 @@
     <section class="view" id="v-status">
       <div id="statusList"></div>
     </section>
+
+    <!-- SCHEDULE -->
+    <section class="view" id="v-schedule">
+      <label>Brand</label>
+      <div class="seg" id="schedBrandSeg">
+        <button type="button" data-b="propzombie" class="on">PropZombie</button>
+        <button type="button" data-b="crewmando">CrewMando</button>
+        <button type="button" data-b="both">Both</button>
+      </div>
+      <label>Batch start date</label>
+      <input id="schedStart" type="date" />
+      <div class="hint">Each calendar entry is generated and scheduled to Buffer as a draft <b>awaiting your approval</b> at its slot time (Central). Nothing publishes until you approve it in the Buffer app.</div>
+      <div style="display:flex; gap:10px; margin-top:16px">
+        <button class="btn sec" id="schedPreview" style="margin-top:0; flex:1">Preview</button>
+        <button class="btn" id="schedRun" style="margin-top:0; flex:1">Schedule to Buffer</button>
+      </div>
+      <div id="schedNote" style="margin-top:14px; padding:12px 14px; border-radius:10px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); color:#fcd34d; font-size:12.5px; line-height:1.5">
+        ⚠️ One-time Buffer setting: set <b>both</b> channels to <b>“Requires Approval”</b> in Buffer, or scheduled posts will auto-publish at their time instead of waiting for you.
+      </div>
+      <div id="schedResults" style="margin-top:14px"></div>
+    </section>
   </main>
 
   <nav>
     <button class="on" data-view="compose"><span class="ico">✎</span>Compose</button>
     <button data-view="review"><span class="ico">✓</span>Review <span id="reviewCount"></span></button>
+    <button data-view="schedule"><span class="ico">📅</span>Schedule</button>
     <button data-view="status"><span class="ico">📡</span>Status</button>
   </nav>
 
@@ -248,17 +270,32 @@
 
     // Status
     async function loadStatus() {
-      const r = await fetch('/api/status');
+      const [r, sr] = await Promise.all([fetch('/api/status'), fetch('/api/scheduled')]);
       const { recent, manual } = await r.json();
+      const { scheduled } = await sr.json();
       const el = $('#statusList');
       let html = '';
       if (manual.length) {
         html += '<h3 style="font-size:14px;color:var(--muted)">Manual post queue</h3>';
         html += manual.map(manualCard).join('');
       }
+      if (scheduled && scheduled.length) {
+        html += '<h3 style="font-size:14px;color:var(--muted)">Scheduled (Buffer)</h3>';
+        html += scheduled.map(schedRowCard).join('');
+      }
       html += '<h3 style="font-size:14px;color:var(--muted)">Recent</h3>';
       html += recent.length ? recent.map(statusCard).join('') : '<div class="empty">No posts yet.</div>';
       el.innerHTML = html;
+    }
+    function schedRowCard(s) {
+      const when = new Date(s.due_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      return `<div class="card">
+        <div class="meta"><span class="pill brand-${s.brand}">${s.brand}</span><span class="pill">${esc(s.channel)}</span><span class="pill s-${s.status}">${esc(s.status)}</span></div>
+        <div class="meta">⏰ ${esc(when)} CT${s.metro ? (' · ' + esc(s.metro)) : ''}</div>
+        <div class="copy" style="margin-top:8px">${esc(s.text || '')}</div>
+        ${s.buffer_post_id ? `<div class="meta">Buffer: ${esc(s.buffer_post_id)}</div>` : ''}
+        ${s.status === 'failed' && s.error ? `<div class="err" style="margin-top:6px">${esc(s.error)}</div>` : ''}
+      </div>`;
     }
     function statusCard(p) {
       const ids = Object.values(p.buffer_post_ids || {});
@@ -287,6 +324,44 @@
     };
     window.markPosted = async (id) => { const r = await fetch('/api/human/' + id + '/posted', { method: 'POST' });
       if (r.ok) { toast('Marked posted'); loadStatus(); } };
+
+    // ── Schedule tab ──
+    const sched = { brand: 'propzombie' };
+    $('#schedBrandSeg').addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      sched.brand = b.dataset.b;
+      [...$('#schedBrandSeg').children].forEach((c) => c.classList.toggle('on', c === b));
+    });
+    // Default the start date to next Monday.
+    (function () { const d = new Date(); const add = ((8 - d.getDay()) % 7) || 7; d.setDate(d.getDate() + add); $('#schedStart').value = d.toISOString().slice(0, 10); })();
+    $('#schedPreview').addEventListener('click', () => runSchedule(true));
+    $('#schedRun').addEventListener('click', () => { if (confirm('Generate and schedule this batch to Buffer as drafts awaiting your approval?')) runSchedule(false); });
+    async function runSchedule(dry) {
+      const el = $('#schedResults'); el.innerHTML = '<div class="empty">Working…</div>';
+      const btns = [$('#schedPreview'), $('#schedRun')]; btns.forEach((b) => (b.disabled = true));
+      try {
+        const r = await fetch(dry ? '/api/schedule/preview' : '/api/schedule/run', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate: $('#schedStart').value, brandFilter: sched.brand }),
+        });
+        const s = await r.json();
+        if (!r.ok) { el.innerHTML = '<div class="err">' + esc(s.error || 'Failed') + '</div>'; return; }
+        const wouldSkip = (s.items || []).filter((i) => i.status === 'skipped').length;
+        const head = dry ? `Preview — ${s.planned} planned${wouldSkip ? ', ' + wouldSkip + ' would skip' : ''}` : `Done — ${s.created} created · ${s.skipped} skipped · ${s.failed} failed`;
+        el.innerHTML = '<div class="card"><b>' + esc(head) + '</b></div>' + (s.items || []).map(schedItemCard).join('');
+        if (!dry) { toast('Batch sent to Buffer'); }
+      } finally { btns.forEach((b) => (b.disabled = false)); }
+    }
+    function schedItemCard(it) {
+      const when = new Date(it.dueAt).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      return `<div class="card">
+        <div class="meta"><span class="pill brand-${it.brand}">${it.brand}</span><span class="pill">${esc(it.channel)}</span><span class="pill s-${it.status}">${esc(it.status)}</span></div>
+        <div class="meta">⏰ ${esc(when)} CT${it.metro ? (' · ' + esc(it.metro)) : ''}</div>
+        <div class="copy" style="margin-top:8px">${esc(it.text)}</div>
+        ${it.bufferPostId ? `<div class="meta">Buffer: ${esc(it.bufferPostId)}</div>` : ''}
+        ${it.reason ? `<div class="meta" style="color:var(--amber)">${esc(it.reason)}</div>` : ''}
+      </div>`;
+    }
   </script>
 </body>
 </html>
