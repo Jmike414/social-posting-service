@@ -62,11 +62,27 @@ test('real run schedules to Buffer; re-running is idempotent (no duplicates)', a
   const r1 = await generateAndScheduleBatch({ startDate: '2026-06-15', brandFilter: 'propzombie', dryRun: false, deps });
   assert.equal(r1.created, 2, '2 facebook entries scheduled');
   assert.equal(r1.skipped, 1, 'linkedin skipped (no channel)');
-  assert.equal((await store.listScheduledPosts({ status: 'awaiting_approval' })).length, 2);
+  assert.equal((await store.listScheduledPosts({ status: 'scheduled' })).length, 2);
 
   const r2 = await generateAndScheduleBatch({ startDate: '2026-06-15', brandFilter: 'propzombie', dryRun: false, deps });
   assert.equal(r2.created, 0, 're-run creates nothing new');
-  assert.equal((await store.listScheduledPosts({ status: 'awaiting_approval' })).length, 2, 'still 2 — no duplicates');
+  assert.equal((await store.listScheduledPosts({ status: 'scheduled' })).length, 2, 'still 2 — no duplicates');
+  await store.close();
+});
+
+test('scheduled posts are sent to Buffer as customScheduled with a dueAt', async () => {
+  const store = await propzombieStore();
+  const inputs = [];
+  const client = fakeClient(async (input) => { inputs.push(input); return { ok: true, post: { id: 'bp_' + inputs.length } }; });
+  await generateAndScheduleBatch({
+    startDate: '2026-06-15', brandFilter: 'propzombie', dryRun: false,
+    deps: { store, drafter, client, sleep: async () => {}, baseDelayMs: 0 },
+  });
+  assert.ok(inputs.length >= 1);
+  for (const input of inputs) {
+    assert.equal(input.mode, 'customScheduled');
+    assert.ok(input.dueAt, 'carries a scheduled dueAt');
+  }
   await store.close();
 });
 

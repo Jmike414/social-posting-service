@@ -183,7 +183,7 @@ class SqliteStore {
 
   // Idempotency: an active (awaiting_approval/sent) row for the same calendar key.
   async findActiveScheduledByKey(calendarKey) {
-    return this.db.prepare("SELECT * FROM scheduled_posts WHERE calendar_key = ? AND status IN ('awaiting_approval','sent') LIMIT 1").get(calendarKey) || null;
+    return this.db.prepare("SELECT * FROM scheduled_posts WHERE calendar_key = ? AND status IN ('scheduled','sent') LIMIT 1").get(calendarKey) || null;
   }
 
   async close() {

@@ -229,14 +229,14 @@ publishes until you do.
   brand+channel+dueAt+copy is skipped, never duplicated). Rate-limit/5xx errors
   back off and retry, then mark that one row `failed` and continue.
 
-### ⚠️ REQUIRED Buffer-side setting — "Requires Approval"
+### Scheduling + approval
 
-The approve-first design depends on a Buffer setting the code cannot enforce:
-**set BOTH channels (PropZombie + CrewMando) to "Requires Approval" in Buffer.**
-Verified live: with it **off**, a `customScheduled` post comes back
-`status: scheduled` and **auto-publishes at its time** — the opposite of what you
-want. With it **on**, the post waits in Buffer for your approval. Set it once per
-channel before running a real batch.
+The scheduler sends each post to Buffer as `customScheduled` + `dueAt`, so it
+lands on Buffer's schedule for that Central-time slot. **You review and approve
+posts directly in the Buffer app** — that's where the approval workflow lives, so
+the service pushes generated content straight to Buffer with no extra approval
+step of its own. (Note: with a plain scheduled post Buffer publishes at `dueAt`
+once approved in its app; manage timing/approval there.)
 
 ### Images are text-only for now (durable hosting needed)
 

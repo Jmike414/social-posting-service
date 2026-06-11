@@ -197,7 +197,7 @@ class PgStore {
   }
 
   async findActiveScheduledByKey(calendarKey) {
-    return this._one("SELECT * FROM scheduled_posts WHERE calendar_key = $1 AND status IN ('awaiting_approval','sent') LIMIT 1", [calendarKey]);
+    return this._one("SELECT * FROM scheduled_posts WHERE calendar_key = $1 AND status IN ('scheduled','sent') LIMIT 1", [calendarKey]);
   }
 
   async close() {

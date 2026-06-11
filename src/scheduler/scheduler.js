@@ -26,8 +26,8 @@ function computeDueAt(startDate, entry) {
 }
 
 // Submit one scheduled post to Buffer with exponential backoff on transient
-// (5xx / rate-limit) errors. mode=customScheduled + dueAt schedules it; with the
-// channel on "Requires Approval" Buffer holds it as a pending-approval draft.
+// (5xx / rate-limit) errors. customScheduled + dueAt places it on Buffer's schedule
+// for that time; the owner reviews/approves it directly in the Buffer app.
 async function submitToBuffer({ client, channelId, service, text, dueAt, imageUrl, sleep, maxAttempts, baseDelayMs }) {
   const assets = imageUrl ? [client.buildImageAsset({ url: imageUrl })] : [];
   const metadata = client.buildPostMetadata ? client.buildPostMetadata(service) : null;
@@ -126,17 +126,17 @@ async function generateAndScheduleBatch({ startDate, brandFilter, dryRun = false
 
     const row = await store.createScheduledPost({
       brand: entry.brand, channel: entry.channel, metro: entry.metro,
-      due_at: dueAt, text, image_url: imageUrl, status: 'scheduled', calendar_key: key,
+      due_at: dueAt, text, image_url: imageUrl, status: 'scheduling', calendar_key: key,
     });
 
     try {
       const post = await submitToBuffer({ client, channelId: channel.id, service: channel.service, text, dueAt, imageUrl, sleep, maxAttempts, baseDelayMs });
-      await store.updateScheduledPost(row.id, { status: 'awaiting_approval', buffer_post_id: post.id, error: null });
-      item.status = 'awaiting_approval';
+      await store.updateScheduledPost(row.id, { status: 'scheduled', buffer_post_id: post.id, error: null });
+      item.status = 'scheduled';
       item.bufferPostId = post.id;
       item.reason = imageSkippedNote.trim() || null;
       summary.created++;
-      logger.info(`Scheduler: scheduled ${entry.brand}/${entry.channel} @ ${dueAt} -> Buffer ${post.id} (awaiting approval)`);
+      logger.info(`Scheduler: scheduled ${entry.brand}/${entry.channel} @ ${dueAt} -> Buffer ${post.id}`);
     } catch (e) {
       const errStr = e && e.message ? e.message : String(e);
       await store.updateScheduledPost(row.id, { status: 'failed', error: errStr });
