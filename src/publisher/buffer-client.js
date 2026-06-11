@@ -152,9 +152,22 @@ function buildImageAsset({ url, thumbnailUrl, altText } = {}) {
   return { image };
 }
 
+// Per-service post metadata. Buffer REQUIRES a post `type` for Facebook and
+// Instagram (verified against live SDL 2026-06-11: FacebookPostMetadataInput.type
+// PostTypeFacebook! = post|story|reel; InstagramPostMetadataInput.type PostType! +
+// shouldShareToFeed!). We publish standard feed posts. Returns null for services
+// that don't need it (or unknown).
+function buildPostMetadata(service) {
+  const s = String(service || '').toLowerCase();
+  if (s === 'facebook') return { facebook: { type: 'post' } };
+  if (s === 'instagram') return { instagram: { type: 'post', shouldShareToFeed: true } };
+  return null;
+}
+
 // Builds a complete CreatePostInput. `assets` is required non-null in the schema,
-// so text-only posts get an empty array.
-function buildCreatePostInput({ channelId, text, mode, dueAt, assets } = {}) {
+// so text-only posts get an empty array. `metadata` carries service-specific
+// fields (e.g. the required Facebook/Instagram post type).
+function buildCreatePostInput({ channelId, text, mode, dueAt, assets, metadata } = {}) {
   if (!channelId) throw new BufferError('createPost requires channelId', { code: 'CLIENT_ERROR' });
   const input = {
     channelId,
@@ -164,6 +177,7 @@ function buildCreatePostInput({ channelId, text, mode, dueAt, assets } = {}) {
   };
   if (text != null) input.text = text;
   if (dueAt) input.dueAt = dueAt; // ISO 8601 UTC, required for customScheduled
+  if (metadata) input.metadata = metadata;
   return input;
 }
 
@@ -288,6 +302,7 @@ module.exports = {
   gql,
   parseRateLimit,
   buildImageAsset,
+  buildPostMetadata,
   buildCreatePostInput,
   createPost,
   getOrganizations,

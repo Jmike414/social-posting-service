@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildCreatePostInput, buildImageAsset, BufferError } = require('../src/publisher/buffer-client');
+const { buildCreatePostInput, buildImageAsset, buildPostMetadata, BufferError } = require('../src/publisher/buffer-client');
 
 test('text post: assets is an empty array (required non-null), default addToQueue', () => {
   const input = buildCreatePostInput({ channelId: 'c1', text: 'hello' });
@@ -46,4 +46,24 @@ test('image post: assets array is embedded into CreatePostInput', () => {
 test('missing channelId / image url throw BufferError', () => {
   assert.throws(() => buildCreatePostInput({ text: 'x' }), BufferError);
   assert.throws(() => buildImageAsset({ altText: 'x' }), BufferError);
+});
+
+test('Facebook posts carry the required post type metadata', () => {
+  assert.deepEqual(buildPostMetadata('facebook'), { facebook: { type: 'post' } });
+});
+
+test('Instagram posts carry type + shouldShareToFeed metadata', () => {
+  assert.deepEqual(buildPostMetadata('instagram'), { instagram: { type: 'post', shouldShareToFeed: true } });
+});
+
+test('unknown/absent service yields no metadata', () => {
+  assert.equal(buildPostMetadata('twitter'), null);
+  assert.equal(buildPostMetadata(undefined), null);
+});
+
+test('buildCreatePostInput embeds metadata when provided, omits it otherwise', () => {
+  const withMeta = buildCreatePostInput({ channelId: 'c1', text: 'hi', metadata: buildPostMetadata('facebook') });
+  assert.deepEqual(withMeta.metadata, { facebook: { type: 'post' } });
+  const without = buildCreatePostInput({ channelId: 'c1', text: 'hi' });
+  assert.equal('metadata' in without, false);
 });

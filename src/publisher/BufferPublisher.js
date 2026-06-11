@@ -76,7 +76,7 @@ class BufferPublisher extends SocialPublisher {
   // attempted — e.g. recovered after a crash mid-submit), first look for an
   // already-created post with identical text on that channel and adopt it instead
   // of resubmitting. This is the "crash between submit and store" guard.
-  async _submitChannel(post, channelId, mode, dueAt, jobPreviouslyAttempted) {
+  async _submitChannel(post, channelId, service, mode, dueAt, jobPreviouslyAttempted) {
     return this._withRetry(async (attempt) => {
       const ambiguous = attempt > 0 || jobPreviouslyAttempted;
       if (ambiguous && post.copy) {
@@ -93,7 +93,10 @@ class BufferPublisher extends SocialPublisher {
         }
       }
       const assets = this._imageAssetsFor(post);
-      const input = this.client.buildCreatePostInput({ channelId, text: post.copy, mode, dueAt, assets });
+      // Buffer requires the per-service post type (Facebook/Instagram reject posts
+      // without one), so attach metadata derived from this channel's service.
+      const metadata = this.client.buildPostMetadata ? this.client.buildPostMetadata(service) : null;
+      const input = this.client.buildCreatePostInput({ channelId, text: post.copy, mode, dueAt, assets, metadata });
       const { post: created } = await this.client.createPost(input);
       return created;
     });
@@ -110,9 +113,17 @@ class BufferPublisher extends SocialPublisher {
     const bufferPostIds = { ...(post.buffer_post_ids || {}) };
     const jobPreviouslyAttempted = (post.attempts || 0) > 0;
 
+    // Map each channel id -> service so we can attach the per-service post type
+    // metadata Buffer requires.
+    let serviceById = {};
+    if (this.store && this.store.resolveChannelsForBrand) {
+      const chans = await this.store.resolveChannelsForBrand(post.brand);
+      serviceById = Object.fromEntries(chans.map((c) => [c.id, c.service]));
+    }
+
     for (const channelId of channelIds) {
       if (bufferPostIds[channelId]) continue; // stored id => never resubmit
-      const node = await this._submitChannel(post, channelId, mode, dueAt, jobPreviouslyAttempted);
+      const node = await this._submitChannel(post, channelId, serviceById[channelId], mode, dueAt, jobPreviouslyAttempted);
       bufferPostIds[channelId] = node.id;
       if (this.store && this.store.updatePost) {
         await this.store.updatePost(post.id, { buffer_post_ids: bufferPostIds });
