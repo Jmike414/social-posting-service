@@ -19,6 +19,7 @@ function rowToPost(row) {
   if (!row) return null;
   const out = { ...row };
   out.auto_publish = !!row.auto_publish;
+  out.ai_draft = !!row.ai_draft;
   out.attempts = Number(row.attempts || 0);
   for (const f of POST_JSON_FIELDS) {
     if (typeof row[f] === 'string') {
@@ -47,6 +48,7 @@ function postInsertValues(input, ts) {
     image_alt: input.image_alt ?? null,
     intended_post_time: input.intended_post_time ?? null,
     auto_publish: input.auto_publish ? 1 : 0,
+    ai_draft: input.ai_draft ? 1 : 0,
     state: input.state || 'drafted',
     channel_ids: JSON.stringify(input.channel_ids || []),
     buffer_post_ids: JSON.stringify(input.buffer_post_ids || {}),
@@ -63,7 +65,7 @@ function postInsertValues(input, ts) {
 function applyPostPatch(current, patch, ts) {
   const next = { ...current };
   for (const [k, v] of Object.entries(patch)) {
-    if (k === 'auto_publish') next[k] = v ? 1 : 0;
+    if (k === 'auto_publish' || k === 'ai_draft') next[k] = v ? 1 : 0;
     else if (POST_JSON_FIELDS.includes(k)) next[k] = JSON.stringify(v);
     else next[k] = v;
   }
@@ -73,7 +75,7 @@ function applyPostPatch(current, patch, ts) {
 
 const POST_COLUMNS = [
   'id', 'brand', 'destination', 'brief', 'copy', 'image_path', 'image_alt', 'intended_post_time',
-  'auto_publish', 'state', 'channel_ids', 'buffer_post_ids', 'scheduling_mode', 'attempts', 'error',
+  'auto_publish', 'ai_draft', 'state', 'channel_ids', 'buffer_post_ids', 'scheduling_mode', 'attempts', 'error',
   'created_at', 'updated_at',
 ];
 

@@ -13,7 +13,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS social_posts (
   id TEXT PRIMARY KEY, brand TEXT NOT NULL, destination TEXT NOT NULL DEFAULT 'buffer',
   brief TEXT NOT NULL, copy TEXT, image_path TEXT, image_alt TEXT, intended_post_time TEXT,
-  auto_publish INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'drafted',
+  auto_publish INTEGER NOT NULL DEFAULT 0, ai_draft INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'drafted',
   channel_ids TEXT NOT NULL DEFAULT '[]', buffer_post_ids TEXT NOT NULL DEFAULT '{}',
   scheduling_mode TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -47,6 +47,9 @@ class SqliteStore {
   async init() {
     this.db.pragma('journal_mode = WAL');
     this.db.exec(SCHEMA);
+    // Idempotent column add for pre-existing local DBs (SQLite has no ADD COLUMN
+    // IF NOT EXISTS; a duplicate-column error just means it's already there).
+    try { this.db.exec('ALTER TABLE social_posts ADD COLUMN ai_draft INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
     return this;
   }
 

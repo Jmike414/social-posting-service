@@ -91,8 +91,16 @@
       </select>
       <div class="hint" id="destHint">Posted automatically via Buffer to the brand's connected channels.</div>
 
-      <label>Brief</label>
-      <textarea id="brief" placeholder="What's this post about? e.g. 'New off-market 3/2 in Tampa, ARV 280k, asking 195k — drive buyers to the deal list.'"></textarea>
+      <label id="briefLabel">Post text</label>
+      <textarea id="brief" placeholder="Write your post exactly as it should appear."></textarea>
+
+      <div class="row" style="margin-top:12px">
+        <div>
+          <div style="font-size:15px">✨ Let AI write it</div>
+          <div class="hint" id="aiHint">Off: your text posts as-is. On: it's a brief and AI drafts the post.</div>
+        </div>
+        <button type="button" class="toggle" id="aiDraft"><span class="knob"></span></button>
+      </div>
 
       <label>Image (optional)</label>
       <input id="image" type="file" accept="image/*" capture="environment" />
@@ -134,7 +142,7 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const state = { brand: 'propzombie', auto: false };
+    const state = { brand: 'propzombie', auto: false, ai: false };
     const $ = (s) => document.querySelector(s);
     const esc = (s) => (s == null ? '' : String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])));
     function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
@@ -147,6 +155,15 @@
     });
     // Auto-publish toggle
     $('#autoPub').addEventListener('click', () => { state.auto = !state.auto; $('#autoPub').classList.toggle('on', state.auto); });
+    // AI-draft toggle — flips the text field between "post as-is" (default) and "brief for AI"
+    $('#aiDraft').addEventListener('click', () => {
+      state.ai = !state.ai;
+      $('#aiDraft').classList.toggle('on', state.ai);
+      $('#briefLabel').textContent = state.ai ? 'Brief for AI' : 'Post text';
+      $('#brief').placeholder = state.ai
+        ? "Describe the post; AI will write it. e.g. 'New off-market 3/2 in Tampa, ARV 280k, asking 195k'"
+        : 'Write your post exactly as it should appear.';
+    });
     // Destination hint
     $('#destination').addEventListener('change', (e) => {
       const v = e.target.value;
@@ -171,12 +188,13 @@
     $('#submitCompose').addEventListener('click', async () => {
       const err = $('#composeErr'); err.textContent = '';
       const brief = $('#brief').value.trim();
-      if (!brief) { err.textContent = 'Brief is required.'; return; }
+      if (!brief) { err.textContent = 'Text is required.'; return; }
       const fd = new FormData();
       fd.append('brand', state.brand);
       fd.append('brief', brief);
       fd.append('destination', $('#destination').value);
       fd.append('auto_publish', state.auto ? 'true' : 'false');
+      fd.append('ai_draft', state.ai ? 'true' : 'false');
       if ($('#imageAlt').value) fd.append('image_alt', $('#imageAlt').value);
       if ($('#intended').value) fd.append('intended_post_time', new Date($('#intended').value).toISOString());
       if ($('#image').files[0]) fd.append('image', $('#image').files[0]);

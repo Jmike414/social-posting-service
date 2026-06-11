@@ -127,6 +127,7 @@ function createApp(deps) {
         image: image_path,
         image_alt: body.image_alt || null,
         auto_publish: body.auto_publish === 'true' || body.auto_publish === true || body.auto_publish === 'on',
+        ai_draft: body.ai_draft === 'true' || body.ai_draft === true || body.ai_draft === 'on',
       });
       nudge();
       res.status(201).json({ id: record.id, state: record.state });

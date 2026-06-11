@@ -32,7 +32,27 @@ test('auto_publish=false routes drafted -> awaiting_review (human gate)', async 
   await processOnce({ store, drafter, publisher: okPublisher });
   const after = await store.getPost(post.id);
   assert.equal(after.state, STATES.AWAITING_REVIEW);
-  assert.ok(after.copy, 'copy was drafted');
+  assert.ok(after.copy, 'copy was set');
+  await store.close();
+});
+
+test('verbatim by default: ai_draft=false posts the typed text exactly as-is', async () => {
+  const store = await makeStore();
+  await store.setChannels('propzombie', [{ id: 'fb_1', service: 'facebook' }]);
+  const post = await store.createPost({ brand: 'propzombie', brief: 'My exact words, unchanged.', state: STATES.DRAFTED, ai_draft: false });
+  await processOnce({ store, drafter, publisher: okPublisher });
+  assert.equal((await store.getPost(post.id)).copy, 'My exact words, unchanged.');
+  await store.close();
+});
+
+test('ai_draft=true runs the drafter, so copy differs from the raw brief', async () => {
+  const store = await makeStore();
+  await store.setChannels('propzombie', [{ id: 'fb_1', service: 'facebook' }]);
+  const post = await store.createPost({ brand: 'propzombie', brief: 'write me something', state: STATES.DRAFTED, ai_draft: true });
+  await processOnce({ store, drafter, publisher: okPublisher });
+  const after = await store.getPost(post.id);
+  assert.notEqual(after.copy, 'write me something');
+  assert.ok(after.copy.length > 0);
   await store.close();
 });
 

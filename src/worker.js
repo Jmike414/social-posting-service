@@ -30,12 +30,17 @@ function platformForDestination(destination) {
 }
 
 async function processDrafted(post, { store, drafter }) {
-  const copy = await drafter.draft({
-    brand: post.brand,
-    brief: post.brief,
-    intendedPostTime: post.intended_post_time,
-    hasImage: !!post.image_path,
-  });
+  // Default: the operator's text IS the post, used verbatim. AI drafting is
+  // opt-in (ai_draft=true) — only then is the brief treated as a prompt the
+  // drafter rewrites. This keeps the AI from "hijacking" hand-written copy.
+  const copy = post.ai_draft
+    ? await drafter.draft({
+        brand: post.brand,
+        brief: post.brief,
+        intendedPostTime: post.intended_post_time,
+        hasImage: !!post.image_path,
+      })
+    : post.brief;
 
   // Manual destinations (FB Groups / WhatsApp) never touch Buffer — draft, then
   // drop straight into the human-post queue as a manual-post card.

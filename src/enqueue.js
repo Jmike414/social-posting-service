@@ -50,6 +50,7 @@ async function enqueue(store, input = {}) {
     image_alt: input.image_alt || null,
     intended_post_time: intended,
     auto_publish: !!input.auto_publish,
+    ai_draft: !!input.ai_draft, // false (default) => brief is posted verbatim; true => AI rewrites it
     state: STATES.DRAFTED,
   });
 }
