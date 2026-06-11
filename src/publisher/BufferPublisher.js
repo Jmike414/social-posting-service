@@ -12,12 +12,14 @@ function defaultSleep(ms) {
 }
 
 // Decide the Buffer scheduling mode from the job. An explicit intended time means
-// customScheduled (Buffer posts at exactly that time); otherwise addToQueue lets
-// Buffer pick the next slot from the channel's schedule.
+// customScheduled (Buffer publishes at exactly that time); otherwise shareNow so an
+// approval publishes immediately ("one-click posting"). A post can opt into Buffer's
+// auto-spaced queue by setting scheduling_mode = 'addToQueue'.
 function modeForPost(post, dueAtOverride) {
   const dueAt = dueAtOverride || post.intended_post_time || null;
   if (dueAt) return { mode: 'customScheduled', dueAt: new Date(dueAt).toISOString() };
-  return { mode: 'addToQueue', dueAt: null };
+  if (post.scheduling_mode === 'addToQueue') return { mode: 'addToQueue', dueAt: null };
+  return { mode: 'shareNow', dueAt: null };
 }
 
 class BufferPublisher extends SocialPublisher {
@@ -121,7 +123,24 @@ class BufferPublisher extends SocialPublisher {
       serviceById = Object.fromEntries(chans.map((c) => [c.id, c.service]));
     }
 
-    for (const channelId of channelIds) {
+    // Instagram requires an image/video — it can't take a text-only post. Skip IG
+    // channels for text-only posts (not a failure) so the post still goes to FB etc.
+    const hasMedia = !!post.image_path;
+    const targetChannels = channelIds.filter((id) => {
+      if (serviceById[id] === 'instagram' && !hasMedia) {
+        logger.info(`Skipping Instagram channel ${id} for a text-only post (Instagram requires an image/video).`);
+        return false;
+      }
+      return true;
+    });
+    if (!targetChannels.length) {
+      throw new BufferError(
+        'No publishable channels for this post (e.g. text-only with only Instagram connected). Add an image, or connect a Facebook page.',
+        { code: 'CLIENT_ERROR' }
+      );
+    }
+
+    for (const channelId of targetChannels) {
       if (bufferPostIds[channelId]) continue; // stored id => never resubmit
       const node = await this._submitChannel(post, channelId, serviceById[channelId], mode, dueAt, jobPreviouslyAttempted);
       bufferPostIds[channelId] = node.id;
@@ -129,7 +148,7 @@ class BufferPublisher extends SocialPublisher {
         await this.store.updatePost(post.id, { buffer_post_ids: bufferPostIds });
       }
     }
-    const allSubmitted = channelIds.every((c) => bufferPostIds[c]);
+    const allSubmitted = targetChannels.every((c) => bufferPostIds[c]);
     return { bufferPostIds, allSubmitted };
   }
 

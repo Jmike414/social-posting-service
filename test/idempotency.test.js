@@ -67,3 +67,52 @@ test('crash recovery: previously-attempted job adopts an existing Buffer post in
   assert.equal(r.bufferPostIds.c2, 'fresh2');
   await store.close();
 });
+
+test('no scheduled time => publishes immediately via shareNow', async () => {
+  const store = await makeStore();
+  let captured;
+  const client = makeClient({ createPost: async (input) => { captured = input; return { ok: true, post: { id: 'p1' } }; } });
+  const pub = new BufferPublisher({ store, client, sleep: async () => {} });
+  const post = await store.createPost({ brand: 'propzombie', brief: 'b', copy: 'hi', state: 'queued', channel_ids: ['c1'] });
+  await pub.publish(await store.getPost(post.id));
+  assert.equal(captured.mode, 'shareNow');
+  await store.close();
+});
+
+test('intended_post_time => customScheduled with dueAt', async () => {
+  const store = await makeStore();
+  let captured;
+  const client = makeClient({ createPost: async (input) => { captured = input; return { ok: true, post: { id: 'p1' } }; } });
+  const pub = new BufferPublisher({ store, client, sleep: async () => {} });
+  const post = await store.createPost({ brand: 'propzombie', brief: 'b', copy: 'hi', state: 'queued', channel_ids: ['c1'], intended_post_time: '2026-07-01T15:00:00.000Z' });
+  await pub.publish(await store.getPost(post.id));
+  assert.equal(captured.mode, 'customScheduled');
+  assert.equal(captured.dueAt, '2026-07-01T15:00:00.000Z');
+  await store.close();
+});
+
+test('text-only post skips Instagram (requires media) but still posts to Facebook', async () => {
+  const store = await makeStore();
+  await store.setChannels('propzombie', [{ id: 'fb', service: 'facebook' }, { id: 'ig', service: 'instagram' }]);
+  const submitted = [];
+  const client = makeClient({ createPost: async (input) => { submitted.push(input.channelId); return { ok: true, post: { id: 'p_' + input.channelId } }; } });
+  const pub = new BufferPublisher({ store, client, sleep: async () => {} });
+  const post = await store.createPost({ brand: 'propzombie', brief: 't', copy: 'text only', state: 'queued', channel_ids: ['fb', 'ig'] });
+  const r = await pub.publish(await store.getPost(post.id));
+  assert.deepEqual(submitted, ['fb'], 'only FB submitted; IG skipped');
+  assert.equal(r.allSubmitted, true);
+  await store.close();
+});
+
+test('image post publishes to BOTH Facebook and Instagram', async () => {
+  const store = await makeStore();
+  await store.setChannels('propzombie', [{ id: 'fb', service: 'facebook' }, { id: 'ig', service: 'instagram' }]);
+  const submitted = [];
+  const client = makeClient({ createPost: async (input) => { submitted.push(input.channelId); return { ok: true, post: { id: 'p_' + input.channelId } }; } });
+  const pub = new BufferPublisher({ store, client, sleep: async () => {} });
+  const post = await store.createPost({ brand: 'propzombie', brief: 'i', copy: 'caption', image_path: 'uploads/x.jpg', state: 'queued', channel_ids: ['fb', 'ig'] });
+  const r = await pub.publish(await store.getPost(post.id));
+  assert.deepEqual(submitted.sort(), ['fb', 'ig']);
+  assert.equal(r.allSubmitted, true);
+  await store.close();
+});
