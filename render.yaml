@@ -1,0 +1,55 @@
+# Render Blueprint — social-posting-service
+# Brings up a Node web service + a managed Postgres, with DATABASE_URL wired in.
+# Secrets are NOT in this file: vars marked `sync: false` are set in the Render
+# dashboard. Apply with: Render Dashboard → New → Blueprint → point at this repo.
+
+databases:
+  - name: social-posting-db
+    databaseName: social_posting
+    user: social
+    plan: basic-256mb        # smallest paid tier with persistence; free tier also works for trials
+
+services:
+  - type: web
+    name: social-posting-service
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Postgres connection string, injected from the managed DB above.
+      # Presence of DATABASE_URL makes the service select PgStore automatically.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: social-posting-db
+          property: connectionString
+
+      - key: NODE_VERSION
+        value: "20"
+
+      # Session cookie signing key — generated once by Render, never committed.
+      - key: SESSION_SECRET
+        generateValue: true
+
+      # PUBLIC_BASE_URL: the service's own public URL (Buffer fetches images by URL).
+      # Render also injects RENDER_EXTERNAL_URL automatically, which the app falls
+      # back to — so this is optional. Set it only to override.
+      - key: PUBLIC_BASE_URL
+        sync: false
+
+      # ── Secrets: set values in the Render dashboard ──
+      - key: BUFFER_API_KEY
+        sync: false
+      - key: CONSOLE_PASSWORD
+        sync: false
+      - key: CONSOLE_PASSWORD_ES   # optional 2nd reviewer login; leave blank to disable
+        sync: false
+      - key: SERVICE_TOKEN         # only needed if the engine uses POST /enqueue
+        sync: false
+      - key: ANTHROPIC_API_KEY     # optional; drafter falls back to heuristic if unset
+        sync: false
+
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-6

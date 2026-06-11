@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1115" />
+  <link rel="manifest" href="/assets/manifest.webmanifest" />
+  <title>Social Console</title>
+  <style>
+    :root { --bg:#0f1115; --card:#181b22; --card2:#1f232c; --fg:#e8eaed; --muted:#9aa0aa; --line:#2a2f3a;
+            --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --pz:#7c3aed; --cm:#0ea5e9; }
+    * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg);
+           color:var(--fg); padding-bottom:76px; }
+    header { position:sticky; top:0; background:rgba(15,17,21,.92); backdrop-filter:blur(8px); padding:14px 16px;
+             display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); z-index:5; }
+    header h1 { font-size:16px; margin:0; }
+    header .out { color:var(--muted); font-size:13px; background:none; border:0; }
+    main { max-width:600px; margin:0 auto; padding:16px; }
+    .view { display:none; }
+    .view.active { display:block; }
+    label { display:block; font-size:13px; color:var(--muted); margin:14px 0 6px; }
+    input, textarea, select { width:100%; padding:13px; font-size:16px; border-radius:10px; border:1px solid var(--line);
+            background:#0d0f14; color:var(--fg); }
+    textarea { min-height:120px; resize:vertical; }
+    .seg { display:flex; gap:8px; }
+    .seg button { flex:1; padding:13px; border-radius:10px; border:1px solid var(--line); background:#0d0f14; color:var(--fg); font-size:15px; }
+    .seg button.on[data-brand="propzombie"] { background:var(--pz); border-color:var(--pz); color:#fff; }
+    .seg button.on[data-brand="crewmando"] { background:var(--cm); border-color:var(--cm); color:#fff; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .toggle { width:52px; height:30px; border-radius:999px; background:var(--line); position:relative; border:0; flex:0 0 auto; }
+    .toggle .knob { position:absolute; top:3px; left:3px; width:24px; height:24px; border-radius:50%; background:#fff; transition:.15s; }
+    .toggle.on { background:var(--green); }
+    .toggle.on .knob { left:25px; }
+    .btn { width:100%; margin-top:18px; padding:15px; font-size:16px; font-weight:600; border:0; border-radius:12px;
+           background:var(--accent); color:#fff; }
+    .btn:active { transform:translateY(1px); }
+    .btn.sec { background:var(--card2); }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+    .card .copy { white-space:pre-wrap; font-size:15px; line-height:1.45; }
+    .card img { width:100%; border-radius:10px; margin-top:10px; }
+    .meta { font-size:12px; color:var(--muted); margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; }
+    .pill { font-size:11px; padding:3px 9px; border-radius:999px; background:var(--card2); color:var(--muted); }
+    .pill.brand-propzombie { background:rgba(124,58,237,.2); color:#c4b5fd; }
+    .pill.brand-crewmando { background:rgba(14,165,233,.2); color:#7dd3fc; }
+    .pill.s-published { background:rgba(34,197,94,.2); color:#86efac; }
+    .pill.s-failed { background:rgba(239,68,68,.2); color:#fca5a5; }
+    .pill.s-queued, .pill.s-posting { background:rgba(245,158,11,.2); color:#fcd34d; }
+    .pill.s-awaiting_review { background:rgba(59,130,246,.2); color:#93c5fd; }
+    .pill.s-rejected { background:rgba(120,120,120,.2); color:#bbb; }
+    .actions { display:flex; gap:8px; margin-top:12px; }
+    .actions button { flex:1; padding:12px; border-radius:10px; border:0; font-size:14px; font-weight:600; }
+    .ok { background:var(--green); color:#04210f; }
+    .warn { background:var(--card2); color:var(--fg); }
+    .danger { background:var(--red); color:#fff; }
+    .err { color:var(--red); font-size:13px; }
+    .editbox { width:100%; margin-top:10px; }
+    nav { position:fixed; bottom:0; left:0; right:0; display:flex; background:var(--card); border-top:1px solid var(--line); }
+    nav button { flex:1; padding:12px 0 16px; background:none; border:0; color:var(--muted); font-size:12px; display:flex;
+                 flex-direction:column; align-items:center; gap:3px; }
+    nav button.on { color:var(--accent); }
+    nav .ico { font-size:20px; }
+    .empty { color:var(--muted); text-align:center; padding:40px 0; font-size:14px; }
+    .toast { position:fixed; bottom:88px; left:50%; transform:translateX(-50%); background:#fff; color:#111; padding:10px 18px;
+             border-radius:999px; font-size:14px; font-weight:600; opacity:0; transition:.2s; pointer-events:none; z-index:20; }
+    .toast.show { opacity:1; }
+    .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+    a { color:#93c5fd; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Social Console</h1>
+    <button class="out" id="logout">Sign out</button>
+  </header>
+
+  <main>
+    <!-- COMPOSE -->
+    <section class="view active" id="v-compose">
+      <label>Brand</label>
+      <div class="seg" id="brandSeg">
+        <button type="button" data-brand="propzombie" class="on">PropZombie</button>
+        <button type="button" data-brand="crewmando">CrewMando</button>
+      </div>
+
+      <label>Destination</label>
+      <select id="destination">
+        <option value="buffer">Buffer — FB Page + Instagram</option>
+        <option value="manual_fb_group">Manual — Facebook Group</option>
+        <option value="manual_whatsapp">Manual — WhatsApp</option>
+      </select>
+      <div class="hint" id="destHint">Posted automatically via Buffer to the brand's connected channels.</div>
+
+      <label>Brief</label>
+      <textarea id="brief" placeholder="What's this post about? e.g. 'New off-market 3/2 in Tampa, ARV 280k, asking 195k — drive buyers to the deal list.'"></textarea>
+
+      <label>Image (optional)</label>
+      <input id="image" type="file" accept="image/*" capture="environment" />
+      <input id="imageAlt" type="text" placeholder="Image alt text (accessibility)" style="margin-top:8px" />
+
+      <label>Intended post time (optional)</label>
+      <input id="intended" type="datetime-local" />
+      <div class="hint">Leave blank to add to the Buffer queue (Buffer picks the slot).</div>
+
+      <div class="row" style="margin-top:18px">
+        <div>
+          <div style="font-size:15px">Auto-publish</div>
+          <div class="hint">Skip human review and queue immediately.</div>
+        </div>
+        <button type="button" class="toggle" id="autoPub"><span class="knob"></span></button>
+      </div>
+
+      <button class="btn" id="submitCompose">Create draft</button>
+      <div class="err" id="composeErr" style="margin-top:10px"></div>
+    </section>
+
+    <!-- REVIEW -->
+    <section class="view" id="v-review">
+      <div id="reviewList"></div>
+    </section>
+
+    <!-- STATUS -->
+    <section class="view" id="v-status">
+      <div id="statusList"></div>
+    </section>
+  </main>
+
+  <nav>
+    <button class="on" data-view="compose"><span class="ico">✎</span>Compose</button>
+    <button data-view="review"><span class="ico">✓</span>Review <span id="reviewCount"></span></button>
+    <button data-view="status"><span class="ico">📡</span>Status</button>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = { brand: 'propzombie', auto: false };
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => (s == null ? '' : String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])));
+    function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+
+    // Brand toggle
+    $('#brandSeg').addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      state.brand = b.dataset.brand;
+      [...$('#brandSeg').children].forEach((c) => c.classList.toggle('on', c === b));
+    });
+    // Auto-publish toggle
+    $('#autoPub').addEventListener('click', () => { state.auto = !state.auto; $('#autoPub').classList.toggle('on', state.auto); });
+    // Destination hint
+    $('#destination').addEventListener('change', (e) => {
+      const v = e.target.value;
+      $('#destHint').textContent = v === 'buffer'
+        ? "Posted automatically via Buffer to the brand's connected channels."
+        : 'Drafted, then routed to the manual post queue (you post it by hand).';
+    });
+
+    // Bottom nav
+    document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.view)));
+    function switchView(v) {
+      document.querySelectorAll('.view').forEach((s) => s.classList.remove('active'));
+      $('#v-' + v).classList.add('active');
+      document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+      if (v === 'review') loadReview();
+      if (v === 'status') loadStatus();
+    }
+
+    $('#logout').addEventListener('click', async () => { await fetch('/logout', { method: 'POST' }); location.href = '/login'; });
+
+    // Compose submit
+    $('#submitCompose').addEventListener('click', async () => {
+      const err = $('#composeErr'); err.textContent = '';
+      const brief = $('#brief').value.trim();
+      if (!brief) { err.textContent = 'Brief is required.'; return; }
+      const fd = new FormData();
+      fd.append('brand', state.brand);
+      fd.append('brief', brief);
+      fd.append('destination', $('#destination').value);
+      fd.append('auto_publish', state.auto ? 'true' : 'false');
+      if ($('#imageAlt').value) fd.append('image_alt', $('#imageAlt').value);
+      if ($('#intended').value) fd.append('intended_post_time', new Date($('#intended').value).toISOString());
+      if ($('#image').files[0]) fd.append('image', $('#image').files[0]);
+      $('#submitCompose').disabled = true;
+      const r = await fetch('/api/compose', { method: 'POST', body: fd });
+      $('#submitCompose').disabled = false;
+      if (!r.ok) { const j = await r.json().catch(() => ({})); err.textContent = j.error || 'Failed'; return; }
+      $('#brief').value = ''; $('#image').value = ''; $('#imageAlt').value = ''; $('#intended').value = '';
+      toast('Draft created');
+      setTimeout(() => switchView('review'), 500);
+    });
+
+    // Review
+    async function loadReview() {
+      const r = await fetch('/api/posts?state=awaiting_review');
+      const { posts } = await r.json();
+      $('#reviewCount').textContent = posts.length ? `(${posts.length})` : '';
+      const el = $('#reviewList');
+      if (!posts.length) { el.innerHTML = '<div class="empty">Nothing awaiting review.</div>'; return; }
+      el.innerHTML = posts.map(reviewCard).join('');
+    }
+    function reviewCard(p) {
+      const channels = (p.channel_ids || []).length ? (p.channel_ids || []).join(', ') : 'no channels mapped for this brand';
+      return `<div class="card" data-id="${p.id}">
+        <div class="meta"><span class="pill brand-${p.brand}">${p.brand}</span>
+          ${p.intended_post_time ? `<span class="pill">⏰ ${esc(new Date(p.intended_post_time).toLocaleString())}</span>` : '<span class="pill">queue slot</span>'}</div>
+        <div class="copy" style="margin-top:10px">${esc(p.copy)}</div>
+        ${p.image_url ? `<img src="${esc(p.image_url)}" alt="">` : ''}
+        <div class="meta">Targets: ${esc(channels)}</div>
+        <textarea class="editbox" style="display:none"></textarea>
+        <div class="actions">
+          <button class="ok" onclick="approve('${p.id}')">Approve</button>
+          <button class="warn" onclick="toggleEdit(this,'${p.id}')">Edit</button>
+          <button class="danger" onclick="reject('${p.id}')">Reject</button>
+        </div>
+      </div>`;
+    }
+    window.approve = async (id) => { const r = await fetch('/api/posts/' + id + '/approve', { method: 'POST' });
+      if (r.ok) { toast('Approved → queued'); loadReview(); } else { toast('Could not approve'); } };
+    window.reject = async (id) => { const r = await fetch('/api/posts/' + id + '/reject', { method: 'POST' });
+      if (r.ok) { toast('Rejected'); loadReview(); } };
+    window.toggleEdit = async (btn, id) => {
+      const card = btn.closest('.card'); const box = card.querySelector('.editbox'); const copy = card.querySelector('.copy');
+      if (box.style.display === 'none') { box.style.display = 'block'; box.value = copy.textContent; btn.textContent = 'Save'; }
+      else {
+        const r = await fetch('/api/posts/' + id + '/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ copy: box.value }) });
+        if (r.ok) { copy.textContent = box.value; box.style.display = 'none'; btn.textContent = 'Edit'; toast('Saved'); }
+      }
+    };
+
+    // Status
+    async function loadStatus() {
+      const r = await fetch('/api/status');
+      const { recent, manual } = await r.json();
+      const el = $('#statusList');
+      let html = '';
+      if (manual.length) {
+        html += '<h3 style="font-size:14px;color:var(--muted)">Manual post queue</h3>';
+        html += manual.map(manualCard).join('');
+      }
+      html += '<h3 style="font-size:14px;color:var(--muted)">Recent</h3>';
+      html += recent.length ? recent.map(statusCard).join('') : '<div class="empty">No posts yet.</div>';
+      el.innerHTML = html;
+    }
+    function statusCard(p) {
+      const ids = Object.values(p.buffer_post_ids || {});
+      return `<div class="card">
+        <div class="meta"><span class="pill brand-${p.brand}">${p.brand}</span><span class="pill s-${p.state}">${p.state}</span></div>
+        <div class="copy" style="margin-top:8px">${esc(p.copy || p.brief)}</div>
+        ${ids.length ? `<div class="meta">Buffer: ${ids.map(esc).join(', ')}</div>` : ''}
+        ${p.state === 'failed' && p.error ? `<div class="err" style="margin-top:8px">${esc(p.error)}</div>` : ''}
+      </div>`;
+    }
+    function manualCard(m) {
+      const label = m.platform === 'failed_buffer' ? 'Buffer failed → post manually' : m.platform;
+      return `<div class="card">
+        <div class="meta"><span class="pill brand-${m.brand}">${m.brand}</span><span class="pill">${esc(label)}</span></div>
+        <div class="copy" style="margin-top:8px" id="m-${m.id}">${esc(m.copy || '')}</div>
+        ${m.error ? `<div class="err" style="margin-top:6px">${esc(m.error)}</div>` : ''}
+        <div class="actions">
+          <button class="warn" onclick="copyText('m-${m.id}')">Copy text</button>
+          <button class="ok" onclick="markPosted('${m.id}')">Mark posted</button>
+        </div>
+      </div>`;
+    }
+    window.copyText = (elId) => {
+      const t = document.getElementById(elId).textContent;
+      navigator.clipboard.writeText(t).then(() => toast('Copied'), () => toast('Copy failed'));
+    };
+    window.markPosted = async (id) => { const r = await fetch('/api/human/' + id + '/posted', { method: 'POST' });
+      if (r.ok) { toast('Marked posted'); loadStatus(); } };
+  </script>
+</body>
+</html>

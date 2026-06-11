@@ -1,0 +1,29 @@
+{
+  "name": "social-posting-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone cross-brand social posting service: Anthropic drafter + Buffer GraphQL poster + mobile operator console. Deliberately separate from the engine.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "setup:channels": "node scripts/setup-channels.js",
+    "introspect": "node scripts/introspect.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.1",
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "multer": "^2.1.1",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Social Posting Console",
+  "short_name": "Social",
+  "description": "Operator console for drafting, reviewing and posting to Buffer.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "icons": []
+}
