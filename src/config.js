@@ -67,9 +67,6 @@ function validate() {
   }
   if (!config.buffer.apiKey) warnings.push('BUFFER_API_KEY not set — posting to Buffer is disabled until provided.');
   if (!config.anthropic.apiKey) warnings.push('ANTHROPIC_API_KEY not set — drafter falls back to the heuristic formatter.');
-  if (config.datastore.databaseUrl) {
-    warnings.push('DATABASE_URL is set, but the Postgres store adapter is not implemented yet — using SQLite. See README.');
-  }
   return { fatal, warnings };
 }
 

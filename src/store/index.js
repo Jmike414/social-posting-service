@@ -28,13 +28,23 @@ async function createStore(arg) {
   if (databaseUrl) {
     const { Pool } = require('pg');
     const pool = new Pool({ connectionString: databaseUrl, max: opts.max || 5 });
-    logger.info('Datastore: Postgres (DATABASE_URL present)');
-    return new PgStore(pool).init();
+    // init() runs CREATE TABLE against Postgres — it only resolves on a live
+    // connection, so logging AFTER it proves PgStore actually engaged (not merely
+    // that DATABASE_URL was present).
+    const store = await new PgStore(pool).init();
+    let version = '';
+    try {
+      const r = await pool.query('select version()');
+      version = ' - ' + String(r.rows[0].version).split(' (')[0];
+    } catch { /* version probe is best-effort; engagement already proven by init() */ }
+    logger.info(`Datastore engaged: Postgres (PgStore via pg.Pool)${version}`);
+    return store;
   }
 
   const sqlitePath = opts.sqlitePath || config.datastore.sqlitePath;
-  logger.info(`Datastore: SQLite (${sqlitePath})`);
-  return new SqliteStore(sqlitePath).init();
+  const store = await new SqliteStore(sqlitePath).init();
+  logger.info(`Datastore engaged: SQLite (${sqlitePath})`);
+  return store;
 }
 
 module.exports = { createStore, newId: mappers.newId, nowIso: mappers.nowIso, SqliteStore, PgStore };
