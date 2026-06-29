@@ -18,6 +18,7 @@ const { enqueue } = require('./enqueue');
 const worker = require('./worker');
 const scheduler = require('./scheduler/scheduler');
 const { STATES, canTransition } = require('./state');
+const bufferClient = require('./publisher/buffer-client');
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -246,6 +247,36 @@ function createApp(deps) {
     }
   });
 
+
+  // ── Diagnostic: test whether Buffer Post.metrics returns real data ───────────
+  // Temporary route. Queries the 3 most-recent published posts and their metrics.
+  // Remove after the orchestrator analytics-source decision is made.
+  app.get('/api/debug/buffer-metrics', requireAuth, async (req, res) => {
+    const METRICS_QUERY = `
+      query GetPostMetrics($input: PostInput!) {
+        post(input: $input) {
+          id status channelId channelService sentAt
+          metricsUpdatedAt
+          metrics { type name value unit }
+        }
+      }`;
+    const posts = (await store.listPosts({ state: STATES.PUBLISHED, limit: 10 }))
+      .filter((p) => p.buffer_post_ids && Object.keys(p.buffer_post_ids).length)
+      .slice(0, 3);
+    if (!posts.length) return res.json({ message: 'no published posts with Buffer IDs found', results: [] });
+    const results = [];
+    for (const post of posts) {
+      for (const [channelId, bufferPostId] of Object.entries(post.buffer_post_ids)) {
+        try {
+          const { data } = await bufferClient.gql(METRICS_QUERY, { input: { id: bufferPostId } });
+          results.push({ postId: post.id, channelId, bufferPostId, data });
+        } catch (e) {
+          results.push({ postId: post.id, channelId, bufferPostId, error: e.message, code: e.code, graphqlErrors: e.graphqlErrors });
+        }
+      }
+    }
+    res.json({ results });
+  });
 
   // Resolve a live link for a published post (best-effort; Buffer hosts the post).
   function publicPost(p) {
