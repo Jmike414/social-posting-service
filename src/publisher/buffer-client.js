@@ -306,6 +306,30 @@ async function introspect(opts = {}) {
   return data && data.__schema;
 }
 
+const SENT_POSTS_WITH_METRICS_QUERY = `
+query GetSentPostsWithMetrics($input: PostsInput!) {
+  posts(input: $input) {
+    edges {
+      node {
+        id channelId sentAt
+        metricsUpdatedAt
+        metrics { type name value unit }
+      }
+    }
+  }
+}`;
+
+// Returns an array of sent-post nodes with their metrics.
+// Join key: node.id matches the buffer_post_id stored at createPost time —
+// the ID is stable from scheduling through sending; post(id) just doesn't
+// serve sent posts. Filter: status=[sent] only.
+async function getSentPostsWithMetrics(organizationId, opts = {}) {
+  const { data } = await gql(SENT_POSTS_WITH_METRICS_QUERY, {
+    input: { organizationId, filter: { status: ['sent'] } },
+  }, opts);
+  return ((data && data.posts && data.posts.edges) || []).map((e) => e && e.node).filter(Boolean);
+}
+
 module.exports = {
   BufferError,
   bufferEnabled,
@@ -322,6 +346,7 @@ module.exports = {
   findPostByText,
   getPost,
   introspect,
+  getSentPostsWithMetrics,
   // exported for tests
   _internal: { CREATE_POST_MUTATION, extractRetryAfter },
 };
