@@ -297,7 +297,7 @@ function createApp(deps) {
       try {
         const orgId = await bufferClient.resolveOrganizationId();
         const { data } = await bufferClient.gql(SENT_POSTS_QUERY, {
-          input: { organizationId: orgId, filter: { status: ['sent'], channelIds: [firstChannelId] }, sort: [{ field: 'createdAt', direction: 'desc' }] },
+          input: { organizationId: orgId, filter: { status: ['sent'] } },
         });
         sentPostsResult = data;
       } catch (e) {
