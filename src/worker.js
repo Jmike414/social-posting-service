@@ -66,16 +66,14 @@ async function processDrafted(post, { store, drafter }) {
   logger.info(`Post ${post.id} drafted -> ${nextState}${post.auto_publish ? ' (auto_publish)' : ''}`);
 }
 
+// Called with an already-claimed post (state=posting, attempts incremented by claimPost).
 async function processQueued(post, { store, publisher }) {
-  const attempts = (post.attempts || 0) + 1;
-  const working = await store.updatePost(post.id, { state: STATES.POSTING, attempts });
   try {
-    const result = await publisher.publish(working);
+    const result = await publisher.publish(post);
     if (result.allSubmitted) {
       await store.updatePost(post.id, { state: STATES.PUBLISHED, buffer_post_ids: result.bufferPostIds, error: null });
       logger.info(`Post ${post.id} published. Buffer ids: ${JSON.stringify(result.bufferPostIds)}`);
     } else {
-      // Should not happen (publish throws on per-channel failure) — be explicit.
       throw Object.assign(new Error('Not all channels submitted'), { code: 'PARTIAL' });
     }
   } catch (err) {
@@ -103,16 +101,24 @@ async function processOnce(deps, { batch = 10 } = {}) {
     await processDrafted(post, deps);
     drafted++;
   }
-  // `posting` rows are resumed (crash recovery) — publisher idempotency adopts
-  // any already-created posts instead of double-submitting.
-  for (const post of await store.listPosts({ states: [STATES.QUEUED, STATES.POSTING], limit: batch })) {
-    await processQueued(post, deps);
+  // Enumerate candidates, then atomically claim each one. A concurrent caller
+  // that races this list will lose the claimPost UPDATE and get null — exactly
+  // one caller proceeds. POSTING rows are re-claimable only after the stale
+  // timeout (crash recovery), so an actively in-flight row is never stolen.
+  const candidates = await store.listPosts({ states: [STATES.QUEUED, STATES.POSTING], limit: batch });
+  for (const candidate of candidates) {
+    const claimed = await store.claimPost(candidate.id);
+    if (!claimed) continue; // another caller claimed it, or still in-flight
+    await processQueued(claimed, deps);
     posted++;
   }
   return { drafted, posted };
 }
 
-// Background loop. Non-overlapping ticks. Returns a stop() function.
+// Background loop. Non-overlapping ticks via the `running` flag.
+// Returns { stop, nudge }. nudge() routes through the same tick so the running
+// flag applies — it cannot bypass the concurrency guard the way a raw
+// processOnce() call could. Atomic claimPost is the second layer of protection.
 function startWorker(deps, { intervalMs = 1500 } = {}) {
   let running = false;
   let stopped = false;
@@ -129,10 +135,14 @@ function startWorker(deps, { intervalMs = 1500 } = {}) {
   };
   const handle = setInterval(tick, intervalMs);
   if (handle.unref) handle.unref();
-  return function stop() {
+  function stop() {
     stopped = true;
     clearInterval(handle);
-  };
+  }
+  function nudge() {
+    tick().catch((e) => logger.error(`nudge error: ${e.message}`));
+  }
+  return { stop, nudge };
 }
 
 module.exports = { processOnce, processDrafted, processQueued, startWorker, serializeError };

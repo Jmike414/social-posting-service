@@ -73,9 +73,15 @@ function createApp(deps) {
   app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/assets', express.static(PUBLIC_DIR));
 
-  // Fire-and-forget worker nudge after a mutation, so the console feels instant.
+  // Fire-and-forget worker nudge. In production, deps.nudge is wired to the
+  // worker's tick so the running flag applies (set by start() after createApp).
+  // Falls back to processOnce for test environments that don't start the worker.
   function nudge() {
-    worker.processOnce(deps).catch((e) => logger.error(`nudge error: ${e.message}`));
+    if (typeof deps.nudge === 'function') {
+      deps.nudge();
+    } else {
+      worker.processOnce(deps).catch((e) => logger.error(`nudge error: ${e.message}`));
+    }
   }
 
   function requireAuth(req, res, next) {
@@ -174,12 +180,15 @@ function createApp(deps) {
   });
 
   app.post('/api/posts/:id/approve', requireAuth, async (req, res) => {
-    const post = await store.getPost(req.params.id);
-    if (!post) return res.status(404).json({ error: 'not found' });
-    if (!canTransition(post.state, STATES.QUEUED)) {
+    // Atomic: only transitions awaiting_review -> queued. Two concurrent taps
+    // both executing before either write commits will each see awaiting_review,
+    // but only one UPDATE wins — the second gets 0 rows and returns 409.
+    const approved = await store.approvePost(req.params.id);
+    if (!approved) {
+      const post = await store.getPost(req.params.id);
+      if (!post) return res.status(404).json({ error: 'not found' });
       return res.status(409).json({ error: `cannot approve from state ${post.state}` });
     }
-    await store.updatePost(post.id, { state: STATES.QUEUED });
     nudge();
     res.json({ ok: true });
   });
@@ -283,7 +292,8 @@ async function start() {
 
   const deps = await buildDeps();
   const app = createApp(deps);
-  worker.startWorker(deps, { intervalMs: 1500 });
+  const workerHandle = worker.startWorker(deps, { intervalMs: 1500 });
+  deps.nudge = workerHandle.nudge; // route nudge() through the running-flag tick
   app.listen(config.port, () => {
     logger.info(`social-posting-service listening on :${config.port} (public: ${config.publicBaseUrl})`);
   });

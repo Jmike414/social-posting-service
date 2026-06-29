@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS channels (
   created_at TEXT NOT NULL, PRIMARY KEY (brand, channel_id)
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS buffer_submits (
+  post_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  buffer_post_id TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (post_id, channel_id)
+);
 CREATE TABLE IF NOT EXISTS scheduled_posts (
   id TEXT PRIMARY KEY, brand TEXT NOT NULL, channel TEXT NOT NULL, metro TEXT,
   due_at TEXT NOT NULL, text TEXT, image_url TEXT, status TEXT NOT NULL DEFAULT 'planned',
@@ -194,6 +201,54 @@ class SqliteStore {
   // Idempotency: an active (awaiting_approval/sent) row for the same calendar key.
   async findActiveScheduledByKey(calendarKey) {
     return this.db.prepare("SELECT * FROM scheduled_posts WHERE calendar_key = ? AND status IN ('scheduled','sent') LIMIT 1").get(calendarKey) || null;
+  }
+
+  // ── Atomic claim / approve ───────────────────────────────────────────────
+  // Returns the post in POSTING state (attempts incremented), or null if another
+  // caller already claimed it (or the stale timeout hasn't elapsed for an
+  // in-flight POSTING row). POSTING rows are re-claimable only after 2 minutes
+  // (crash recovery window). Stale null buffer_submits are cleared on claim so
+  // crash-recovery retries get a clean dedup slot.
+  async claimPost(id) {
+    const CLAIM_TIMEOUT_MS = 2 * 60 * 1000;
+    const staleThreshold = new Date(Date.now() - CLAIM_TIMEOUT_MS).toISOString();
+    const result = this.db.prepare(
+      "UPDATE social_posts SET state='posting', attempts=attempts+1, updated_at=? WHERE id=? AND (state='queued' OR (state='posting' AND updated_at < ?))"
+    ).run(nowIso(), id, staleThreshold);
+    if (result.changes === 0) return null;
+    this.db.prepare('DELETE FROM buffer_submits WHERE post_id=? AND buffer_post_id IS NULL').run(id);
+    return this.getPost(id);
+  }
+
+  // Atomic approve: transitions awaiting_review → queued. Returns the updated post
+  // or null if the post is not in awaiting_review (already approved, or not found).
+  // A 409 response to the caller signals a duplicate tap or concurrent request.
+  async approvePost(id) {
+    const result = this.db.prepare(
+      "UPDATE social_posts SET state='queued', updated_at=? WHERE id=? AND state='awaiting_review'"
+    ).run(nowIso(), id);
+    if (result.changes === 0) return null;
+    return this.getPost(id);
+  }
+
+  // ── buffer_submits dedup helpers ─────────────────────────────────────────
+  // INSERT the (post_id, channel_id) slot. Returns true if inserted (caller should
+  // proceed to submit), false on conflict (another caller holds the slot).
+  async insertBufferSubmit(postId, channelId) {
+    try {
+      this.db.prepare('INSERT INTO buffer_submits (post_id, channel_id, created_at) VALUES (?, ?, ?)').run(postId, channelId, nowIso());
+      return true;
+    } catch {
+      return false; // UNIQUE constraint violation
+    }
+  }
+
+  async getBufferSubmit(postId, channelId) {
+    return this.db.prepare('SELECT * FROM buffer_submits WHERE post_id=? AND channel_id=?').get(postId, channelId) || null;
+  }
+
+  async recordBufferSubmit(postId, channelId, bufferPostId) {
+    this.db.prepare('UPDATE buffer_submits SET buffer_post_id=? WHERE post_id=? AND channel_id=?').run(bufferPostId, postId, channelId);
   }
 
   async close() {

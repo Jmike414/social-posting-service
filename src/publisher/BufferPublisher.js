@@ -167,10 +167,34 @@ class BufferPublisher extends SocialPublisher {
 
     for (const channelId of targetChannels) {
       if (bufferPostIds[channelId]) continue; // stored id => never resubmit
+
+      // Layer 2: claim the dedup slot before any network call. If the INSERT
+      // conflicts, another caller already holds this slot — either in-flight
+      // (skip to prevent duplicate) or already completed (adopt the stored id).
+      // Crash recovery: claimPost clears null slots on re-claim, so retry always
+      // gets a clean insert here.
+      if (this.store && this.store.insertBufferSubmit) {
+        const slotClaimed = await this.store.insertBufferSubmit(post.id, channelId);
+        if (!slotClaimed) {
+          const existing = await this.store.getBufferSubmit(post.id, channelId);
+          if (existing && existing.buffer_post_id) {
+            bufferPostIds[channelId] = existing.buffer_post_id;
+            if (this.store.updatePost) await this.store.updatePost(post.id, { buffer_post_ids: bufferPostIds });
+            logger.info(`Dedup: adopted ${existing.buffer_post_id} for channel ${channelId} (post_id=${post.id})`);
+          } else {
+            logger.warn(`Dedup: slot conflict with no buffer_post_id for ${post.id}/${channelId} — skipping to prevent duplicate`);
+          }
+          continue;
+        }
+      }
+
       const node = await this._submitChannel(post, channelId, serviceById[channelId], mode, dueAt, jobPreviouslyAttempted);
       bufferPostIds[channelId] = node.id;
       if (this.store && this.store.updatePost) {
         await this.store.updatePost(post.id, { buffer_post_ids: bufferPostIds });
+      }
+      if (this.store && this.store.recordBufferSubmit) {
+        await this.store.recordBufferSubmit(post.id, channelId, node.id);
       }
     }
     const allSubmitted = targetChannels.every((c) => bufferPostIds[c]);

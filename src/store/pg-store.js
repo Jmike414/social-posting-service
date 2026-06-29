@@ -35,6 +35,13 @@ const DDL = [
     created_at TEXT NOT NULL, PRIMARY KEY (brand, channel_id)
   )`,
   `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)`,
+  `CREATE TABLE IF NOT EXISTS buffer_submits (
+    post_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    buffer_post_id TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (post_id, channel_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS scheduled_posts (
     id TEXT PRIMARY KEY, brand TEXT NOT NULL, channel TEXT NOT NULL, metro TEXT,
     due_at TEXT NOT NULL, text TEXT, image_url TEXT, status TEXT NOT NULL DEFAULT 'planned',
@@ -208,6 +215,44 @@ class PgStore {
 
   async findActiveScheduledByKey(calendarKey) {
     return this._one("SELECT * FROM scheduled_posts WHERE calendar_key = $1 AND status IN ('scheduled','sent') LIMIT 1", [calendarKey]);
+  }
+
+  // ── Atomic claim / approve ───────────────────────────────────────────────
+  async claimPost(id) {
+    const CLAIM_TIMEOUT_MS = 2 * 60 * 1000;
+    const staleThreshold = new Date(Date.now() - CLAIM_TIMEOUT_MS).toISOString();
+    const row = await this._one(
+      "UPDATE social_posts SET state='posting', attempts=attempts+1, updated_at=$1 WHERE id=$2 AND (state='queued' OR (state='posting' AND updated_at < $3)) RETURNING *",
+      [nowIso(), id, staleThreshold]
+    );
+    if (!row) return null;
+    await this.pool.query('DELETE FROM buffer_submits WHERE post_id=$1 AND buffer_post_id IS NULL', [id]);
+    return rowToPost(row);
+  }
+
+  async approvePost(id) {
+    const row = await this._one(
+      "UPDATE social_posts SET state='queued', updated_at=$1 WHERE id=$2 AND state='awaiting_review' RETURNING *",
+      [nowIso(), id]
+    );
+    return row ? rowToPost(row) : null;
+  }
+
+  // ── buffer_submits dedup helpers ─────────────────────────────────────────
+  async insertBufferSubmit(postId, channelId) {
+    const r = await this.pool.query(
+      'INSERT INTO buffer_submits (post_id, channel_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING post_id',
+      [postId, channelId, nowIso()]
+    );
+    return r.rows.length > 0;
+  }
+
+  async getBufferSubmit(postId, channelId) {
+    return this._one('SELECT * FROM buffer_submits WHERE post_id=$1 AND channel_id=$2', [postId, channelId]);
+  }
+
+  async recordBufferSubmit(postId, channelId, bufferPostId) {
+    await this.pool.query('UPDATE buffer_submits SET buffer_post_id=$1 WHERE post_id=$2 AND channel_id=$3', [bufferPostId, postId, channelId]);
   }
 
   async close() {
