@@ -18,7 +18,6 @@ const { enqueue } = require('./enqueue');
 const worker = require('./worker');
 const scheduler = require('./scheduler/scheduler');
 const { STATES, canTransition } = require('./state');
-const bufferClient = require('./publisher/buffer-client');
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -247,66 +246,6 @@ function createApp(deps) {
     }
   });
 
-
-  // ── Diagnostic: test whether Buffer Post.metrics returns real data ───────────
-  // Temporary route. Remove after the orchestrator analytics-source decision is made.
-  app.get('/api/debug/buffer-metrics', requireAuth, async (req, res) => {
-    // Path A: post(id) — works for scheduled/pending posts; returns NOT_FOUND for sent posts
-    const METRICS_BY_ID = `
-      query GetPostMetrics($input: PostInput!) {
-        post(input: $input) {
-          id status channelId channelService sentAt
-          metricsUpdatedAt
-          metrics { type name value unit }
-        }
-      }`;
-    // Path B: posts(organizationId, filter:{ status:[sent] }) — queries the sent history
-    const SENT_POSTS_QUERY = `
-      query GetSentPosts($input: PostsInput!) {
-        posts(input: $input) {
-          edges {
-            node {
-              id status channelId channelService sentAt text
-              metricsUpdatedAt
-              metrics { type name value unit }
-            }
-          }
-        }
-      }`;
-
-    const localPosts = (await store.listPosts({ state: STATES.PUBLISHED, limit: 10 }))
-      .filter((p) => p.buffer_post_ids && Object.keys(p.buffer_post_ids).length)
-      .slice(0, 3);
-
-    const byIdResults = [];
-    for (const post of localPosts) {
-      for (const [channelId, bufferPostId] of Object.entries(post.buffer_post_ids)) {
-        try {
-          const { data } = await bufferClient.gql(METRICS_BY_ID, { input: { id: bufferPostId } });
-          byIdResults.push({ postId: post.id, channelId, bufferPostId, data });
-        } catch (e) {
-          byIdResults.push({ postId: post.id, channelId, bufferPostId, error: e.message, code: e.code, graphqlErrors: e.graphqlErrors });
-        }
-      }
-    }
-
-    // Path B: use the first channel ID we have to query sent posts
-    let sentPostsResult = null;
-    const firstChannelId = localPosts.length ? Object.keys(localPosts[0].buffer_post_ids)[0] : null;
-    if (firstChannelId) {
-      try {
-        const orgId = await bufferClient.resolveOrganizationId();
-        const { data } = await bufferClient.gql(SENT_POSTS_QUERY, {
-          input: { organizationId: orgId, filter: { status: ['sent'] } },
-        });
-        sentPostsResult = data;
-      } catch (e) {
-        sentPostsResult = { error: e.message, code: e.code, graphqlErrors: e.graphqlErrors };
-      }
-    }
-
-    res.json({ byIdResults, sentPostsResult });
-  });
 
   // Resolve a live link for a published post (best-effort; Buffer hosts the post).
   function publicPost(p) {
