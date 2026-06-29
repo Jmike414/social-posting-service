@@ -4,11 +4,11 @@ const crypto = require('crypto');
 const { DateTime } = require('luxon');
 const { CALENDAR, SLOTS, TIMEZONE } = require('./content-calendar');
 const { createDrafter } = require('../drafter');
-const bufferClient = require('../publisher/buffer-client');
 const { logger } = require('../logger');
+const { STATES } = require('../state');
 
 // Stable idempotency key for a calendar slot+copy. Re-running a batch with the
-// same start date + unchanged calendar produces the same keys, so already-sent
+// same start date + unchanged calendar produces the same keys, so already-queued
 // posts are skipped instead of duplicated.
 function calendarKey(brand, channel, dueAt, text) {
   const h = crypto.createHash('sha1').update(String(text || '')).digest('hex').slice(0, 12);
@@ -25,43 +25,21 @@ function computeDueAt(startDate, entry) {
   return base.plus({ days: entry.dayOffset || 0 }).set({ hour: hh, minute: mm, second: 0, millisecond: 0 }).toISO();
 }
 
-// Submit one scheduled post to Buffer with exponential backoff on transient
-// (5xx / rate-limit) errors. customScheduled + dueAt places it on Buffer's schedule
-// for that time; the owner reviews/approves it directly in the Buffer app.
-async function submitToBuffer({ client, channelId, service, text, dueAt, imageUrl, sleep, maxAttempts, baseDelayMs }) {
-  const assets = imageUrl ? [client.buildImageAsset({ url: imageUrl })] : [];
-  const metadata = client.buildPostMetadata ? client.buildPostMetadata(service) : null;
-  const input = client.buildCreatePostInput({ channelId, text, mode: 'customScheduled', dueAt, assets, metadata });
-  let lastErr;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      const { post } = await client.createPost(input);
-      return post;
-    } catch (e) {
-      lastErr = e;
-      const retryable = e && (e.code === 'RATE_LIMIT' || e.code === 'SERVER_ERROR');
-      if (!retryable || attempt === maxAttempts - 1) throw e;
-      const delay = e.retryAfter != null ? e.retryAfter * 1000 : baseDelayMs * 2 ** attempt;
-      logger.warn(`Scheduler: transient Buffer error (${e.code}); retry ${attempt + 1}/${maxAttempts - 1} in ${delay}ms`);
-      await sleep(delay);
-    }
-  }
-  throw lastErr;
-}
-
-// Generate + schedule a batch from the content calendar.
+// Generate a batch from the content calendar INTO the console's Review queue.
+// Each calendar entry becomes a `social_posts` row in `awaiting_review` — copy
+// generated, scheduled time (`intended_post_time`) and target channel attached.
+// The owner approves it with one click in the console; on approval the worker
+// schedules it to Buffer (customScheduled) for its dueAt. Rejected posts never
+// reach Buffer. (We control approval here because Buffer's own approval gate is a
+// paid-plan feature.)
 //   { startDate:'YYYY-MM-DD', brandFilter:'propzombie'|'crewmando'|'both', dryRun, deps }
-//   deps: { store, drafter?, client?, sleep?, maxAttempts?, baseDelayMs?, allowImages? }
+//   deps: { store, drafter?, allowImages? }
 // Returns a summary { planned, created, skipped, failed, items[] }.
 async function generateAndScheduleBatch({ startDate, brandFilter, dryRun = false, deps = {} }) {
   const { store } = deps;
   if (!store) throw new Error('generateAndScheduleBatch requires deps.store');
   if (!startDate) throw new Error('startDate (YYYY-MM-DD) is required');
   const drafter = deps.drafter || createDrafter();
-  const client = deps.client || bufferClient;
-  const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const maxAttempts = deps.maxAttempts || 3;
-  const baseDelayMs = deps.baseDelayMs == null ? 1500 : deps.baseDelayMs;
   const allowImages = !!deps.allowImages; // images need durable public hosting (off by default)
 
   const wantBrand = (b) => !brandFilter || brandFilter === 'both' || b === brandFilter;
@@ -91,9 +69,8 @@ async function generateAndScheduleBatch({ startDate, brandFilter, dryRun = false
 
     // Image hosting isn't durable-public yet -> text-only this batch (see README).
     const imageUrl = allowImages ? (entry.imageUrl || null) : null;
-    const imageSkippedNote = !allowImages && entry.imageUrl ? ' (image dropped: durable public hosting not configured)' : '';
 
-    const item = { brand: entry.brand, channel: entry.channel, metro: entry.metro, dueAt, text, status: null, reason: null, bufferPostId: null };
+    const item = { brand: entry.brand, channel: entry.channel, metro: entry.metro, dueAt, text, status: null, reason: null, postId: null };
     summary.planned++;
 
     if (!channel) {
@@ -108,49 +85,50 @@ async function generateAndScheduleBatch({ startDate, brandFilter, dryRun = false
 
     if (dryRun) {
       item.status = 'planned';
-      item.reason = imageSkippedNote.trim() || null;
       summary.items.push(item);
       continue;
     }
 
-    // Idempotency: skip if an active (awaiting_approval/sent) row already exists.
-    const existing = await store.findActiveScheduledByKey(key);
+    // Idempotency: skip if an active post already exists for this calendar key.
+    const existing = await store.findActivePostByCalendarKey(key);
     if (existing) {
       item.status = 'skipped';
-      item.reason = 'already scheduled (idempotent)';
-      item.bufferPostId = existing.buffer_post_id || null;
+      item.reason = 'already in the review queue (idempotent)';
+      item.postId = existing.id;
       summary.skipped++;
       summary.items.push(item);
       continue;
     }
 
-    const row = await store.createScheduledPost({
-      brand: entry.brand, channel: entry.channel, metro: entry.metro,
-      due_at: dueAt, text, image_url: imageUrl, status: 'scheduling', calendar_key: key,
-    });
-
     try {
-      const post = await submitToBuffer({ client, channelId: channel.id, service: channel.service, text, dueAt, imageUrl, sleep, maxAttempts, baseDelayMs });
-      await store.updateScheduledPost(row.id, { status: 'scheduled', buffer_post_id: post.id, error: null });
-      item.status = 'scheduled';
-      item.bufferPostId = post.id;
-      item.reason = imageSkippedNote.trim() || null;
+      const post = await store.createPost({
+        brand: entry.brand,
+        destination: 'buffer',
+        brief: entry.brief,
+        copy: text, // already generated — no re-draft in the worker
+        image_path: imageUrl,
+        intended_post_time: dueAt, // worker schedules to Buffer for this time on approval
+        channel_ids: [channel.id], // this calendar entry's specific channel
+        state: STATES.AWAITING_REVIEW,
+        auto_publish: false,
+        ai_draft: false,
+        calendar_key: key,
+      });
+      item.status = 'awaiting_review';
+      item.postId = post.id;
       summary.created++;
-      logger.info(`Scheduler: scheduled ${entry.brand}/${entry.channel} @ ${dueAt} -> Buffer ${post.id}`);
+      logger.info(`Scheduler: queued for review ${entry.brand}/${entry.channel} @ ${dueAt} (post ${post.id})`);
     } catch (e) {
-      const errStr = e && e.message ? e.message : String(e);
-      await store.updateScheduledPost(row.id, { status: 'failed', error: errStr });
       item.status = 'failed';
-      item.reason = errStr;
+      item.reason = e.message;
       summary.failed++;
-      logger.error(`Scheduler: failed ${entry.brand}/${entry.channel} @ ${dueAt}: ${errStr}`);
+      logger.error(`Scheduler: failed to queue ${entry.brand}/${entry.channel}: ${e.message}`);
     }
 
     summary.items.push(item);
-    await sleep(baseDelayMs); // pace createPost calls within Buffer's rate window
   }
 
   return summary;
 }
 
-module.exports = { generateAndScheduleBatch, computeDueAt, calendarKey, submitToBuffer };
+module.exports = { generateAndScheduleBatch, computeDueAt, calendarKey };
