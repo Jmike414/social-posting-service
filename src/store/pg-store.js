@@ -50,6 +50,15 @@ const DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_posts(status)`,
   `CREATE INDEX IF NOT EXISTS idx_scheduled_key ON scheduled_posts(calendar_key)`,
+  `CREATE TABLE IF NOT EXISTS post_metrics (
+    post_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    buffer_post_id TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    metrics_updated_at TEXT,
+    metrics_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (post_id, channel_id)
+  )`,
 ];
 
 function placeholders(n, start = 1) {
@@ -253,6 +262,29 @@ class PgStore {
 
   async recordBufferSubmit(postId, channelId, bufferPostId) {
     await this.pool.query('UPDATE buffer_submits SET buffer_post_id=$1 WHERE post_id=$2 AND channel_id=$3', [bufferPostId, postId, channelId]);
+  }
+
+  async upsertPostMetrics({ postId, channelId, bufferPostId, fetchedAt, metricsUpdatedAt, metricsJson }) {
+    await this.pool.query(
+      `INSERT INTO post_metrics (post_id, channel_id, buffer_post_id, fetched_at, metrics_updated_at, metrics_json)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (post_id, channel_id) DO UPDATE SET
+         buffer_post_id = EXCLUDED.buffer_post_id,
+         fetched_at = EXCLUDED.fetched_at,
+         metrics_updated_at = EXCLUDED.metrics_updated_at,
+         metrics_json = EXCLUDED.metrics_json`,
+      [postId, channelId, bufferPostId, fetchedAt, metricsUpdatedAt || null, metricsJson]
+    );
+  }
+
+  async getPostMetrics(postId) {
+    const { rows } = await this.pool.query('SELECT * FROM post_metrics WHERE post_id = $1 ORDER BY channel_id', [postId]);
+    return rows;
+  }
+
+  async listAllPostMetrics() {
+    const { rows } = await this.pool.query('SELECT * FROM post_metrics ORDER BY post_id, channel_id');
+    return rows;
   }
 
   async close() {

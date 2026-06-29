@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS scheduled_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_posts(status);
 CREATE INDEX IF NOT EXISTS idx_scheduled_key ON scheduled_posts(calendar_key);
+CREATE TABLE IF NOT EXISTS post_metrics (
+  post_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  buffer_post_id TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  metrics_updated_at TEXT,
+  metrics_json TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (post_id, channel_id)
+);
 `;
 
 class SqliteStore {
@@ -249,6 +258,26 @@ class SqliteStore {
 
   async recordBufferSubmit(postId, channelId, bufferPostId) {
     this.db.prepare('UPDATE buffer_submits SET buffer_post_id=? WHERE post_id=? AND channel_id=?').run(bufferPostId, postId, channelId);
+  }
+
+  async upsertPostMetrics({ postId, channelId, bufferPostId, fetchedAt, metricsUpdatedAt, metricsJson }) {
+    this.db.prepare(
+      `INSERT INTO post_metrics (post_id, channel_id, buffer_post_id, fetched_at, metrics_updated_at, metrics_json)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(post_id, channel_id) DO UPDATE SET
+         buffer_post_id = excluded.buffer_post_id,
+         fetched_at = excluded.fetched_at,
+         metrics_updated_at = excluded.metrics_updated_at,
+         metrics_json = excluded.metrics_json`
+    ).run(postId, channelId, bufferPostId, fetchedAt, metricsUpdatedAt || null, metricsJson);
+  }
+
+  async getPostMetrics(postId) {
+    return this.db.prepare('SELECT * FROM post_metrics WHERE post_id = ? ORDER BY channel_id').all(postId);
+  }
+
+  async listAllPostMetrics() {
+    return this.db.prepare('SELECT * FROM post_metrics ORDER BY post_id, channel_id').all();
   }
 
   async close() {
