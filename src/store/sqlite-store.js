@@ -15,10 +15,11 @@ CREATE TABLE IF NOT EXISTS social_posts (
   brief TEXT NOT NULL, copy TEXT, image_path TEXT, image_alt TEXT, intended_post_time TEXT,
   auto_publish INTEGER NOT NULL DEFAULT 0, ai_draft INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'drafted',
   channel_ids TEXT NOT NULL DEFAULT '[]', buffer_post_ids TEXT NOT NULL DEFAULT '{}',
-  scheduling_mode TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT,
+  scheduling_mode TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, calendar_key TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_social_posts_state ON social_posts(state);
+CREATE INDEX IF NOT EXISTS idx_social_posts_calkey ON social_posts(calendar_key);
 CREATE TABLE IF NOT EXISTS human_post_queue (
   id TEXT PRIMARY KEY, source_post_id TEXT, brand TEXT NOT NULL, platform TEXT NOT NULL,
   copy TEXT, image_path TEXT, error TEXT, status TEXT NOT NULL DEFAULT 'pending',
@@ -58,6 +59,10 @@ class SqliteStore {
     // Idempotent column add for pre-existing local DBs (SQLite has no ADD COLUMN
     // IF NOT EXISTS; a duplicate-column error just means it's already there).
     try { this.db.exec('ALTER TABLE social_posts ADD COLUMN ai_draft INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE social_posts ADD COLUMN calendar_key TEXT'); } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE social_posts ADD COLUMN media_type TEXT'); } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE social_posts ADD COLUMN detected_ratio TEXT'); } catch { /* already exists */ }
+    try { this.db.exec("ALTER TABLE social_posts ADD COLUMN eligible_destinations TEXT NOT NULL DEFAULT '[]'"); } catch { /* already exists */ }
     return this;
   }
 
@@ -71,6 +76,11 @@ class SqliteStore {
 
   async getPost(id) {
     return rowToPost(this.db.prepare('SELECT * FROM social_posts WHERE id = ?').get(id));
+  }
+
+  // Idempotency for the scheduler: an existing non-terminal post for a calendar key.
+  async findActivePostByCalendarKey(calendarKey) {
+    return rowToPost(this.db.prepare("SELECT * FROM social_posts WHERE calendar_key = ? AND state IN ('awaiting_review','queued','posting','published') LIMIT 1").get(calendarKey));
   }
 
   async updatePost(id, patch) {

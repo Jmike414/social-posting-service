@@ -143,24 +143,34 @@ function extractRetryAfter(body, headers) {
 
 // ── Input builders (Buffer-shaped) ───────────────────────────────────────────
 
-// New (post-2026-05-25) assets format. @oneOf: exactly the `image` variant.
+// @oneOf: image variant.
 function buildImageAsset({ url, thumbnailUrl, altText } = {}) {
   if (!url) throw new BufferError('image asset requires a url', { code: 'CLIENT_ERROR' });
   const image = { url };
   if (thumbnailUrl) image.thumbnailUrl = thumbnailUrl;
-  if (altText) image.metadata = { altText }; // ImageAssetInput.metadata: ImageMetadataInput (single object, per live SDL 2026-06-11)
+  if (altText) image.metadata = { altText }; // ImageAssetInput.metadata per live SDL 2026-06-11
   return { image };
+}
+
+// @oneOf: video variant. thumbnailUrl is optional but recommended by Buffer docs.
+function buildVideoAsset({ url, thumbnailUrl } = {}) {
+  if (!url) throw new BufferError('video asset requires a url', { code: 'CLIENT_ERROR' });
+  const video = { url };
+  if (thumbnailUrl) video.thumbnailUrl = thumbnailUrl;
+  return { video };
 }
 
 // Per-service post metadata. Buffer REQUIRES a post `type` for Facebook and
 // Instagram (verified against live SDL 2026-06-11: FacebookPostMetadataInput.type
 // PostTypeFacebook! = post|story|reel; InstagramPostMetadataInput.type PostType! +
-// shouldShareToFeed!). We publish standard feed posts. Returns null for services
-// that don't need it (or unknown).
-function buildPostMetadata(service) {
+// shouldShareToFeed!).
+//
+// isReel: when true (video + 9:16 ratio) set the reel type so Buffer routes the
+// asset to the Reels surface rather than the feed video surface.
+function buildPostMetadata(service, { isReel = false } = {}) {
   const s = String(service || '').toLowerCase();
-  if (s === 'facebook') return { facebook: { type: 'post' } };
-  if (s === 'instagram') return { instagram: { type: 'post', shouldShareToFeed: true } };
+  if (s === 'facebook') return { facebook: { type: isReel ? 'reel' : 'post' } };
+  if (s === 'instagram') return { instagram: { type: isReel ? 'reel' : 'post', shouldShareToFeed: true } };
   return null;
 }
 
@@ -302,6 +312,7 @@ module.exports = {
   gql,
   parseRateLimit,
   buildImageAsset,
+  buildVideoAsset,
   buildPostMetadata,
   buildCreatePostInput,
   createPost,

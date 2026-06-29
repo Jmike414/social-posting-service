@@ -13,12 +13,17 @@ const DDL = [
     brief TEXT NOT NULL, copy TEXT, image_path TEXT, image_alt TEXT, intended_post_time TEXT,
     auto_publish INTEGER NOT NULL DEFAULT 0, ai_draft INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'drafted',
     channel_ids TEXT NOT NULL DEFAULT '[]', buffer_post_ids TEXT NOT NULL DEFAULT '{}',
-    scheduling_mode TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT,
+    scheduling_mode TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, calendar_key TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   )`,
-  // Idempotent column add for the already-created production table.
+  // Idempotent column adds for the already-created production table.
   `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS ai_draft INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS calendar_key TEXT`,
+  `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS media_type TEXT`,
+  `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS detected_ratio TEXT`,
+  `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS eligible_destinations TEXT NOT NULL DEFAULT '[]'`,
   `CREATE INDEX IF NOT EXISTS idx_social_posts_state ON social_posts(state)`,
+  `CREATE INDEX IF NOT EXISTS idx_social_posts_calkey ON social_posts(calendar_key)`,
   `CREATE TABLE IF NOT EXISTS human_post_queue (
     id TEXT PRIMARY KEY, source_post_id TEXT, brand TEXT NOT NULL, platform TEXT NOT NULL,
     copy TEXT, image_path TEXT, error TEXT, status TEXT NOT NULL DEFAULT 'pending',
@@ -70,6 +75,11 @@ class PgStore {
 
   async getPost(id) {
     return rowToPost(await this._one('SELECT * FROM social_posts WHERE id = $1', [id]));
+  }
+
+  // Idempotency for the scheduler: an existing non-terminal post for a calendar key.
+  async findActivePostByCalendarKey(calendarKey) {
+    return rowToPost(await this._one("SELECT * FROM social_posts WHERE calendar_key = $1 AND state IN ('awaiting_review','queued','posting','published') LIMIT 1", [calendarKey]));
   }
 
   async updatePost(id, patch) {

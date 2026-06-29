@@ -7,6 +7,14 @@ const { logger } = require('../logger');
 
 const { BufferError } = bufferClient;
 
+// Map eligible_destinations channel-type strings to Buffer service names.
+// Used to decide whether a channel should receive a video post.
+const CHANNEL_TYPE_TO_SERVICE = {
+  ig_reel: 'instagram', ig_story: 'instagram', ig_feed: 'instagram',
+  fb_reel: 'facebook',  fb_story: 'facebook',  fb_feed: 'facebook',
+  linkedin: 'linkedin',
+};
+
 function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -44,15 +52,26 @@ class BufferPublisher extends SocialPublisher {
     return this._orgIdCache;
   }
 
-  // Public, Buffer-reachable URL for an uploaded image. Buffer fetches images by
-  // URL, so this must resolve to a host Buffer can reach (real https on deploy).
-  _imageAssetsFor(post) {
+  // Public, Buffer-reachable URL for an uploaded image or video. Buffer fetches
+  // media by URL so this must resolve to a publicly reachable host on deploy.
+  _mediaAssetsFor(post) {
     if (!post.image_path) return [];
     const raw = String(post.image_path);
-    // Already an absolute URL (programmatic /enqueue) -> use as-is. Otherwise it's
-    // a local upload path served by this service under PUBLIC_BASE_URL.
     const url = /^https?:\/\//i.test(raw) ? raw : `${config.publicBaseUrl}/${raw.replace(/^\/+/, '')}`;
+    if (post.media_type === 'video') {
+      return [this.client.buildVideoAsset({ url })];
+    }
     return [this.client.buildImageAsset({ url, altText: post.image_alt || undefined })];
+  }
+
+  // Returns true when the video ratio is eligible for this Buffer channel service.
+  // Always returns true for non-video posts (no ratio constraint applies).
+  _videoEligibleForService(post, service) {
+    if (post.media_type !== 'video') return true;
+    const eligible = Array.isArray(post.eligible_destinations) ? post.eligible_destinations : [];
+    if (!eligible.length) return true; // ratio unknown — allow and let Buffer validate
+    const eligibleServices = new Set(eligible.map((d) => CHANNEL_TYPE_TO_SERVICE[d]).filter(Boolean));
+    return eligibleServices.has(String(service || '').toLowerCase());
   }
 
   // Retry wrapper: max `maxAttempts`, exponential backoff, but ONLY for transient
@@ -94,10 +113,9 @@ class BufferPublisher extends SocialPublisher {
           logger.warn(`Idempotency lookup failed (continuing to submit): ${e.message}`);
         }
       }
-      const assets = this._imageAssetsFor(post);
-      // Buffer requires the per-service post type (Facebook/Instagram reject posts
-      // without one), so attach metadata derived from this channel's service.
-      const metadata = this.client.buildPostMetadata ? this.client.buildPostMetadata(service) : null;
+      const assets = this._mediaAssetsFor(post);
+      const isReel = post.media_type === 'video' && post.detected_ratio === '9:16';
+      const metadata = this.client.buildPostMetadata ? this.client.buildPostMetadata(service, { isReel }) : null;
       const input = this.client.buildCreatePostInput({ channelId, text: post.copy, mode, dueAt, assets, metadata });
       const { post: created } = await this.client.createPost(input);
       return created;
@@ -123,12 +141,19 @@ class BufferPublisher extends SocialPublisher {
       serviceById = Object.fromEntries(chans.map((c) => [c.id, c.service]));
     }
 
-    // Instagram requires an image/video — it can't take a text-only post. Skip IG
-    // channels for text-only posts (not a failure) so the post still goes to FB etc.
+    // Instagram requires media and only accepts video in the 9:16 (Reel) format.
+    // Skip IG for text-only posts, and skip any service channel whose format the
+    // video's detected ratio doesn't match (delegator: route, never convert).
     const hasMedia = !!post.image_path;
     const targetChannels = channelIds.filter((id) => {
-      if (serviceById[id] === 'instagram' && !hasMedia) {
-        logger.info(`Skipping Instagram channel ${id} for a text-only post (Instagram requires an image/video).`);
+      const svc = serviceById[id];
+      if (svc === 'instagram' && !hasMedia) {
+        logger.info(`Skipping Instagram channel ${id} — text-only post (Instagram requires media).`);
+        return false;
+      }
+      if (!this._videoEligibleForService(post, svc)) {
+        const ratio = post.detected_ratio || 'unknown';
+        logger.info(`Skipping ${svc} channel ${id} — video ratio ${ratio} is not eligible for this service.`);
         return false;
       }
       return true;

@@ -2,21 +2,26 @@
 
 const { isBrand } = require('./config');
 const { STATES } = require('./state');
+const { mediaTypeFromPath } = require('./store/mappers');
 
 // The ENTIRE programmatic contract. A caller (the console, or the engine via
 // POST /enqueue) creates work by inserting one `drafted` social_posts row through
 // this function. Nothing else is a supported inbound surface.
 //
 //   enqueue(store, { brand, brief, intended_post_time?, image?, image_alt?,
-//                    auto_publish?, destination? }) -> created record (state 'drafted')
+//                    auto_publish?, destination?,
+//                    media_type?, detected_ratio?, eligible_destinations? }) -> record
 //
 //   brand        : 'propzombie' | 'crewmando'                 (required)
 //   brief        : free-text brief for the drafter            (required)
 //   destination  : 'buffer' (default) | 'manual_fb_group' | 'manual_whatsapp'
-//   image        : public image URL OR local upload path      (optional)
-//   image_alt    : alt text for accessibility                 (optional)
+//   image        : public image/video URL OR local upload path (optional)
+//   image_alt    : alt text for accessibility                  (optional)
 //   intended_post_time : ISO 8601 — honored as the scheduled time (optional)
 //   auto_publish : bool, default false — when true, skips human review
+//   media_type   : 'image' | 'video' — inferred from extension if omitted
+//   detected_ratio       : ratio class string, e.g. '9:16', '16:9'  (optional)
+//   eligible_destinations: string[] of eligible channel types         (optional)
 
 const DESTINATIONS = ['buffer', 'manual_fb_group', 'manual_whatsapp'];
 
@@ -42,16 +47,22 @@ async function enqueue(store, input = {}) {
     intended = d.toISOString();
   }
 
+  const imagePath = input.image || input.video_path || null;
+  const mediaType = input.media_type || (imagePath ? mediaTypeFromPath(imagePath) : null);
+
   return store.createPost({
     brand,
     destination,
     brief,
-    image_path: input.image || null,
+    image_path: imagePath,
     image_alt: input.image_alt || null,
     intended_post_time: intended,
     auto_publish: !!input.auto_publish,
-    ai_draft: !!input.ai_draft, // false (default) => brief is posted verbatim; true => AI rewrites it
+    ai_draft: !!input.ai_draft,
     state: STATES.DRAFTED,
+    media_type: mediaType,
+    detected_ratio: input.detected_ratio || null,
+    eligible_destinations: Array.isArray(input.eligible_destinations) ? input.eligible_destinations : [],
   });
 }
 

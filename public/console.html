@@ -48,6 +48,9 @@
     .pill.s-queued, .pill.s-posting { background:rgba(245,158,11,.2); color:#fcd34d; }
     .pill.s-awaiting_review { background:rgba(59,130,246,.2); color:#93c5fd; }
     .pill.s-rejected { background:rgba(120,120,120,.2); color:#bbb; }
+    .pill.ratio { background:rgba(59,130,246,.15); color:#93c5fd; font-weight:700; }
+    .pill.eligible { background:rgba(34,197,94,.15); color:#86efac; }
+    .pill.not-ready { background:rgba(239,68,68,.1); color:#fca5a5; }
     .actions { display:flex; gap:8px; margin-top:12px; }
     .actions button { flex:1; padding:12px; border-radius:10px; border:0; font-size:14px; font-weight:600; }
     .ok { background:var(--green); color:#04210f; }
@@ -102,9 +105,10 @@
         <button type="button" class="toggle" id="aiDraft"><span class="knob"></span></button>
       </div>
 
-      <label>Image (optional)</label>
-      <input id="image" type="file" accept="image/*" capture="environment" />
-      <input id="imageAlt" type="text" placeholder="Image alt text (accessibility)" style="margin-top:8px" />
+      <label>Media — image or video (optional)</label>
+      <input id="media" type="file" accept="image/*,video/*" capture="environment" />
+      <div id="ratioDetect" style="display:none;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.18);font-size:13px;line-height:1.55"></div>
+      <input id="imageAlt" type="text" placeholder="Image alt text / video caption alt (accessibility)" style="margin-top:8px" />
 
       <label>Intended post time (optional)</label>
       <input id="intended" type="datetime-local" />
@@ -142,13 +146,13 @@
       </div>
       <label>Batch start date</label>
       <input id="schedStart" type="date" />
-      <div class="hint">Each calendar entry is generated and scheduled to Buffer as a draft <b>awaiting your approval</b> at its slot time (Central). Nothing publishes until you approve it in the Buffer app.</div>
+      <div class="hint">Each calendar entry is generated and added to your <b>Review</b> tab with its scheduled slot time (Central). Approve each with one tap — approved posts are scheduled to Buffer for their time; rejected ones never go out.</div>
       <div style="display:flex; gap:10px; margin-top:16px">
         <button class="btn sec" id="schedPreview" style="margin-top:0; flex:1">Preview</button>
-        <button class="btn" id="schedRun" style="margin-top:0; flex:1">Schedule to Buffer</button>
+        <button class="btn" id="schedRun" style="margin-top:0; flex:1">Generate to Review</button>
       </div>
       <div id="schedNote" style="margin-top:14px; padding:12px 14px; border-radius:10px; background:rgba(57,255,20,0.1); border:1px solid rgba(57,255,20,0.25); color:#bdf7b0; font-size:12.5px; line-height:1.5">
-        Generated posts are scheduled straight to Buffer at their slot times. Review and approve them in the <b>Buffer app</b>.
+        Generated posts land in your <b>Review</b> tab — approve each with one tap. Approved posts are scheduled to Buffer for their slot time.
       </div>
       <div id="schedResults" style="margin-top:14px"></div>
     </section>
@@ -194,6 +198,81 @@
         : 'Drafted, then routed to the manual post queue (you post it by hand).';
     });
 
+    // ── Client-side video dimension detection ────────────────────────────────
+    // Reads pixel dimensions from a local video file before upload so the
+    // destination selector can be filtered immediately — no round-trip needed.
+
+    // Same ratio rules as video-probe.js (must stay in sync).
+    const CLIENT_RATIO_RULES = [
+      { test: (r) => r <= 0.62,                       ratioClass: '9:16',  label: '9:16 vertical',   eligible: ['IG Reel', 'FB Reel', 'IG Story', 'FB Story'], notReady: ['LinkedIn'] },
+      { test: (r) => r > 0.62 && r <= 0.88,           ratioClass: '4:5',   label: '4:5 portrait',    eligible: ['IG Feed', 'FB Feed'],                          notReady: ['IG Reel', 'LinkedIn'] },
+      { test: (r) => r > 0.88 && r <= 1.15,           ratioClass: '1:1',   label: '1:1 square',      eligible: ['IG Feed', 'FB Feed'],                          notReady: ['IG Reel', 'LinkedIn'] },
+      { test: (r) => r > 1.15 && r <= 1.50,           ratioClass: '4:3',   label: '4:3 landscape',   eligible: ['FB Feed'],                                     notReady: ['IG Reel', 'IG Feed', 'LinkedIn'] },
+      { test: (r) => r > 1.50,                        ratioClass: '16:9',  label: '16:9 widescreen', eligible: ['LinkedIn'],                                    notReady: ['IG Reel', 'IG Feed', 'FB Reel'] },
+    ];
+
+    // Destinations where video format matters; manual queues accept anything.
+    const BUFFER_REQUIRES_RATIO = ['buffer'];
+
+    function clientClassifyRatio(w, h) {
+      if (!w || !h) return null;
+      const r = w / h;
+      return CLIENT_RATIO_RULES.find((rule) => rule.test(r)) || null;
+    }
+
+    function resetDestinationOptions() {
+      const sel = $('#destination');
+      [...sel.options].forEach((opt) => { opt.disabled = false; opt.textContent = opt.textContent.replace(/ ⚠.*/, ''); });
+    }
+
+    function applyRatioToDestination(ratioInfo) {
+      resetDestinationOptions();
+      if (!ratioInfo) return;
+      const sel = $('#destination');
+      [...sel.options].forEach((opt) => {
+        if (!BUFFER_REQUIRES_RATIO.includes(opt.value)) return; // manual lanes always eligible
+        const notReadyStr = ratioInfo.notReady.length ? ` ⚠ not ${ratioInfo.notReady.join('/')} ready` : '';
+        if (notReadyStr) opt.textContent = opt.textContent + notReadyStr;
+      });
+    }
+
+    const VIDEO_EXTS = /\.(mp4|mov|webm|m4v|avi|mkv)$/i;
+
+    $('#media').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      const box = $('#ratioDetect');
+      if (!file) { box.style.display = 'none'; resetDestinationOptions(); return; }
+      if (!VIDEO_EXTS.test(file.name)) { box.style.display = 'none'; resetDestinationOptions(); return; }
+
+      box.style.display = 'block';
+      box.textContent = 'Reading video dimensions…';
+
+      const url = URL.createObjectURL(file);
+      const vid = document.createElement('video');
+      vid.preload = 'metadata';
+      vid.src = url;
+      vid.onloadedmetadata = () => {
+        URL.revokeObjectURL(url);
+        const w = vid.videoWidth;
+        const h = vid.videoHeight;
+        const ratioInfo = clientClassifyRatio(w, h);
+        if (!ratioInfo) {
+          box.textContent = `${w}×${h} — aspect ratio unknown. All destinations offered; server will validate.`;
+          resetDestinationOptions();
+          return;
+        }
+        const eligibleHtml = ratioInfo.eligible.map((d) => `<span class="pill eligible">${d}</span>`).join(' ');
+        const notReadyHtml = ratioInfo.notReady.map((d) => `<span class="pill not-ready">not ${d}-ready</span>`).join(' ');
+        box.innerHTML = `<span class="pill ratio">${ratioInfo.label}</span> ${w}×${h} &nbsp;·&nbsp; ${eligibleHtml}${notReadyHtml ? ' &nbsp;' + notReadyHtml : ''}`;
+        applyRatioToDestination(ratioInfo);
+      };
+      vid.onerror = () => {
+        URL.revokeObjectURL(url);
+        box.textContent = 'Could not read video dimensions in browser. Server will probe after upload.';
+        resetDestinationOptions();
+      };
+    });
+
     // Bottom nav
     document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.view)));
     function switchView(v) {
@@ -219,12 +298,14 @@
       fd.append('ai_draft', state.ai ? 'true' : 'false');
       if ($('#imageAlt').value) fd.append('image_alt', $('#imageAlt').value);
       if ($('#intended').value) fd.append('intended_post_time', new Date($('#intended').value).toISOString());
-      if ($('#image').files[0]) fd.append('image', $('#image').files[0]);
+      if ($('#media').files[0]) fd.append('media', $('#media').files[0]);
       $('#submitCompose').disabled = true;
       const r = await fetch('/api/compose', { method: 'POST', body: fd });
       $('#submitCompose').disabled = false;
       if (!r.ok) { const j = await r.json().catch(() => ({})); err.textContent = j.error || 'Failed'; return; }
-      $('#brief').value = ''; $('#image').value = ''; $('#imageAlt').value = ''; $('#intended').value = '';
+      $('#brief').value = ''; $('#media').value = ''; $('#imageAlt').value = ''; $('#intended').value = '';
+      $('#ratioDetect').style.display = 'none';
+      resetDestinationOptions();
       toast('Draft created');
       setTimeout(() => switchView('review'), 500);
     });
@@ -238,13 +319,35 @@
       if (!posts.length) { el.innerHTML = '<div class="empty">Nothing awaiting review.</div>'; return; }
       el.innerHTML = posts.map(reviewCard).join('');
     }
+    function ratioPills(p) {
+      if (!p.media_type || p.media_type !== 'video') return '';
+      const ratio = p.detected_ratio;
+      const eligible = p.eligible_destinations || [];
+      if (!ratio) return '<span class="pill not-ready">ratio unknown</span>';
+
+      // Map eligible destination keys to human labels.
+      const DEST_LABELS = { ig_reel: 'IG Reel', fb_reel: 'FB Reel', ig_story: 'IG Story', fb_story: 'FB Story',
+                            ig_feed: 'IG Feed', fb_feed: 'FB Feed', linkedin: 'LinkedIn' };
+      const ALL_DESTS = ['ig_reel', 'fb_reel', 'ig_story', 'fb_story', 'ig_feed', 'fb_feed', 'linkedin'];
+      const eligibleSet = new Set(eligible);
+      const notReady = ALL_DESTS.filter((d) => !eligibleSet.has(d) && DEST_LABELS[d]);
+
+      const eligPills = eligible.map((d) => DEST_LABELS[d] ? `<span class="pill eligible">${DEST_LABELS[d]}</span>` : '').join(' ');
+      const notPills = notReady.map((d) => `<span class="pill not-ready">not ${DEST_LABELS[d]}-ready</span>`).join(' ');
+      return `<span class="pill ratio">${esc(ratio)}</span> ${eligPills} ${notPills}`;
+    }
+
     function reviewCard(p) {
       const channels = (p.channel_ids || []).length ? (p.channel_ids || []).join(', ') : 'no channels mapped for this brand';
+      const isVideo = p.media_type === 'video';
       return `<div class="card" data-id="${p.id}">
         <div class="meta"><span class="pill brand-${p.brand}">${p.brand}</span>
+          ${isVideo ? '<span class="pill">🎬 video</span>' : ''}
           ${p.intended_post_time ? `<span class="pill">⏰ ${esc(new Date(p.intended_post_time).toLocaleString())}</span>` : '<span class="pill">queue slot</span>'}</div>
+        ${p.media_type === 'video' ? `<div class="meta" style="margin-top:6px">${ratioPills(p)}</div>` : ''}
         <div class="copy" style="margin-top:10px">${esc(p.copy)}</div>
-        ${p.image_url ? `<img src="${esc(p.image_url)}" alt="">` : ''}
+        ${p.image_url && !isVideo ? `<img src="${esc(p.image_url)}" alt="">` : ''}
+        ${isVideo && p.image_url ? `<div class="meta" style="margin-top:6px"><a href="${esc(p.image_url)}" target="_blank" rel="noopener">▶ Preview video</a></div>` : ''}
         <div class="meta">Targets: ${esc(channels)}</div>
         <textarea class="editbox" style="display:none"></textarea>
         <div class="actions">
@@ -270,32 +373,17 @@
 
     // Status
     async function loadStatus() {
-      const [r, sr] = await Promise.all([fetch('/api/status'), fetch('/api/scheduled')]);
+      const r = await fetch('/api/status');
       const { recent, manual } = await r.json();
-      const { scheduled } = await sr.json();
       const el = $('#statusList');
       let html = '';
       if (manual.length) {
         html += '<h3 style="font-size:14px;color:var(--muted)">Manual post queue</h3>';
         html += manual.map(manualCard).join('');
       }
-      if (scheduled && scheduled.length) {
-        html += '<h3 style="font-size:14px;color:var(--muted)">Scheduled (Buffer)</h3>';
-        html += scheduled.map(schedRowCard).join('');
-      }
       html += '<h3 style="font-size:14px;color:var(--muted)">Recent</h3>';
       html += recent.length ? recent.map(statusCard).join('') : '<div class="empty">No posts yet.</div>';
       el.innerHTML = html;
-    }
-    function schedRowCard(s) {
-      const when = new Date(s.due_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-      return `<div class="card">
-        <div class="meta"><span class="pill brand-${s.brand}">${s.brand}</span><span class="pill">${esc(s.channel)}</span><span class="pill s-${s.status}">${esc(s.status)}</span></div>
-        <div class="meta">⏰ ${esc(when)} CT${s.metro ? (' · ' + esc(s.metro)) : ''}</div>
-        <div class="copy" style="margin-top:8px">${esc(s.text || '')}</div>
-        ${s.buffer_post_id ? `<div class="meta">Buffer: ${esc(s.buffer_post_id)}</div>` : ''}
-        ${s.status === 'failed' && s.error ? `<div class="err" style="margin-top:6px">${esc(s.error)}</div>` : ''}
-      </div>`;
     }
     function statusCard(p) {
       const ids = Object.values(p.buffer_post_ids || {});
@@ -335,7 +423,7 @@
     // Default the start date to next Monday.
     (function () { const d = new Date(); const add = ((8 - d.getDay()) % 7) || 7; d.setDate(d.getDate() + add); $('#schedStart').value = d.toISOString().slice(0, 10); })();
     $('#schedPreview').addEventListener('click', () => runSchedule(true));
-    $('#schedRun').addEventListener('click', () => { if (confirm('Generate and schedule this batch to Buffer as drafts awaiting your approval?')) runSchedule(false); });
+    $('#schedRun').addEventListener('click', () => { if (confirm('Generate this batch into your Review queue?')) runSchedule(false); });
     async function runSchedule(dry) {
       const el = $('#schedResults'); el.innerHTML = '<div class="empty">Working…</div>';
       const btns = [$('#schedPreview'), $('#schedRun')]; btns.forEach((b) => (b.disabled = true));
@@ -347,9 +435,9 @@
         const s = await r.json();
         if (!r.ok) { el.innerHTML = '<div class="err">' + esc(s.error || 'Failed') + '</div>'; return; }
         const wouldSkip = (s.items || []).filter((i) => i.status === 'skipped').length;
-        const head = dry ? `Preview — ${s.planned} planned${wouldSkip ? ', ' + wouldSkip + ' would skip' : ''}` : `Done — ${s.created} created · ${s.skipped} skipped · ${s.failed} failed`;
+        const head = dry ? `Preview — ${s.planned} planned${wouldSkip ? ', ' + wouldSkip + ' would skip' : ''}` : `Added ${s.created} to Review · ${s.skipped} skipped · ${s.failed} failed`;
         el.innerHTML = '<div class="card"><b>' + esc(head) + '</b></div>' + (s.items || []).map(schedItemCard).join('');
-        if (!dry) { toast('Batch sent to Buffer'); }
+        if (!dry) { toast('Added to Review — approve there'); }
       } finally { btns.forEach((b) => (b.disabled = false)); }
     }
     function schedItemCard(it) {
@@ -358,7 +446,6 @@
         <div class="meta"><span class="pill brand-${it.brand}">${it.brand}</span><span class="pill">${esc(it.channel)}</span><span class="pill s-${it.status}">${esc(it.status)}</span></div>
         <div class="meta">⏰ ${esc(when)} CT${it.metro ? (' · ' + esc(it.metro)) : ''}</div>
         <div class="copy" style="margin-top:8px">${esc(it.text)}</div>
-        ${it.bufferPostId ? `<div class="meta">Buffer: ${esc(it.bufferPostId)}</div>` : ''}
         ${it.reason ? `<div class="meta" style="color:var(--amber)">${esc(it.reason)}</div>` : ''}
       </div>`;
     }

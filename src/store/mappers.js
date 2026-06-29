@@ -13,7 +13,7 @@ function newId() {
   return crypto.randomUUID();
 }
 
-const POST_JSON_FIELDS = ['channel_ids', 'buffer_post_ids'];
+const POST_JSON_FIELDS = ['channel_ids', 'buffer_post_ids', 'eligible_destinations'];
 
 function rowToPost(row) {
   if (!row) return null;
@@ -33,6 +33,13 @@ function rowToPost(row) {
     }
   }
   return out;
+}
+
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.webm', '.m4v', '.avi', '.mkv']);
+function mediaTypeFromPath(filePath) {
+  if (!filePath) return null;
+  const ext = String(filePath).toLowerCase().match(/\.[^.]+$/);
+  return ext && VIDEO_EXTENSIONS.has(ext[0]) ? 'video' : 'image';
 }
 
 // Normalises an incoming create payload into the flat column values both stores
@@ -55,6 +62,10 @@ function postInsertValues(input, ts) {
     scheduling_mode: input.scheduling_mode ?? null,
     attempts: input.attempts || 0,
     error: input.error ?? null,
+    calendar_key: input.calendar_key ?? null,
+    media_type: input.media_type ?? null,
+    detected_ratio: input.detected_ratio ?? null,
+    eligible_destinations: JSON.stringify(input.eligible_destinations || []),
     created_at: ts,
     updated_at: ts,
   };
@@ -76,7 +87,7 @@ function applyPostPatch(current, patch, ts) {
 const POST_COLUMNS = [
   'id', 'brand', 'destination', 'brief', 'copy', 'image_path', 'image_alt', 'intended_post_time',
   'auto_publish', 'ai_draft', 'state', 'channel_ids', 'buffer_post_ids', 'scheduling_mode', 'attempts', 'error',
-  'created_at', 'updated_at',
+  'calendar_key', 'media_type', 'detected_ratio', 'eligible_destinations', 'created_at', 'updated_at',
 ];
 
 // ── scheduled_posts (the auto-scheduler's own table; plain columns, no JSON) ──
@@ -106,6 +117,7 @@ function scheduledInsertValues(input, ts) {
 const SCHEDULED_UPDATABLE = ['brand', 'channel', 'metro', 'due_at', 'text', 'image_url', 'status', 'buffer_post_id', 'calendar_key', 'error'];
 
 module.exports = {
-  nowIso, newId, rowToPost, postInsertValues, applyPostPatch, POST_JSON_FIELDS, POST_COLUMNS,
+  nowIso, newId, rowToPost, postInsertValues, applyPostPatch,
+  POST_JSON_FIELDS, POST_COLUMNS, mediaTypeFromPath,
   SCHEDULED_COLUMNS, scheduledInsertValues, SCHEDULED_UPDATABLE,
 };

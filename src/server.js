@@ -8,6 +8,8 @@ const session = require('express-session');
 const multer = require('multer');
 
 const { config, validate, isBrand } = require('./config');
+const { probe: probeVideo } = require('./video-probe');
+const { mediaTypeFromPath } = require('./store/mappers');
 const { logger } = require('./logger');
 const { createStore } = require('./db');
 const { createDrafter } = require('./drafter');
@@ -61,8 +63,11 @@ function createApp(deps) {
         cb(null, `${crypto.randomUUID()}${ext}`);
       },
     }),
-    limits: { fileSize: 15 * 1024 * 1024 },
+    // 500 MB covers typical 60-second 1080p Reel exports from InVideo / CapCut.
+    limits: { fileSize: 500 * 1024 * 1024 },
   });
+  // Accept both 'media' (new canonical) and 'image' (legacy form field name).
+  const uploadMedia = upload.fields([{ name: 'media', maxCount: 1 }, { name: 'image', maxCount: 1 }]);
 
   // Uploaded images are served publicly so Buffer can fetch them by URL.
   app.use('/uploads', express.static(UPLOADS_DIR));
@@ -116,22 +121,47 @@ function createApp(deps) {
   // ── Console API (auth) ───────────────────────────────────────────────────────
   app.get('/', requireAuth, (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'console.html')));
 
-  app.post('/api/compose', requireAuth, upload.single('image'), async (req, res) => {
+  app.post('/api/compose', requireAuth, uploadMedia, async (req, res) => {
     try {
       const body = req.body || {};
-      const image_path = req.file ? `uploads/${req.file.filename}` : null;
+      // Accept 'media' (new) or 'image' (legacy) field name.
+      const uploadedFile = (req.files && (req.files.media || req.files.image) || [])[0] || null;
+      const mediaLocalPath = uploadedFile ? path.join(UPLOADS_DIR, uploadedFile.filename) : null;
+      const mediaServePath = uploadedFile ? `uploads/${uploadedFile.filename}` : null;
+
+      let mediaType = null;
+      let detectedRatio = null;
+      let eligibleDestinations = [];
+
+      if (uploadedFile) {
+        mediaType = mediaTypeFromPath(uploadedFile.originalname);
+        if (mediaType === 'video') {
+          const probeResult = await probeVideo(mediaLocalPath);
+          if (probeResult) {
+            detectedRatio = probeResult.detectedRatio;
+            eligibleDestinations = probeResult.eligibleDestinations;
+            logger.info(`Video probe: ${uploadedFile.filename} → ${probeResult.width}×${probeResult.height} (${detectedRatio})`);
+          } else {
+            logger.warn(`Video probe failed for ${uploadedFile.filename} — ratio unknown, all destinations offered`);
+          }
+        }
+      }
+
       const record = await enqueue(store, {
         brand: body.brand,
         brief: body.brief,
         destination: body.destination || 'buffer',
         intended_post_time: body.intended_post_time || null,
-        image: image_path,
+        image: mediaServePath,
         image_alt: body.image_alt || null,
         auto_publish: body.auto_publish === 'true' || body.auto_publish === true || body.auto_publish === 'on',
         ai_draft: body.ai_draft === 'true' || body.ai_draft === true || body.ai_draft === 'on',
+        media_type: mediaType,
+        detected_ratio: detectedRatio,
+        eligible_destinations: eligibleDestinations,
       });
       nudge();
-      res.status(201).json({ id: record.id, state: record.state });
+      res.status(201).json({ id: record.id, state: record.state, detected_ratio: detectedRatio, eligible_destinations: eligibleDestinations });
     } catch (e) {
       res.status(e.statusCode || 500).json({ error: e.message });
     }
@@ -207,9 +237,6 @@ function createApp(deps) {
     }
   });
 
-  app.get('/api/scheduled', requireAuth, async (req, res) => {
-    res.json({ scheduled: await store.listScheduledPosts({ limit: 200 }) });
-  });
 
   // Resolve a live link for a published post (best-effort; Buffer hosts the post).
   function publicPost(p) {
@@ -226,6 +253,9 @@ function createApp(deps) {
       channel_ids: p.channel_ids,
       buffer_post_ids: p.buffer_post_ids,
       error: p.error,
+      media_type: p.media_type || null,
+      detected_ratio: p.detected_ratio || null,
+      eligible_destinations: p.eligible_destinations || [],
       created_at: p.created_at,
       updated_at: p.updated_at,
     };
