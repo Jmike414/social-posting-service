@@ -320,13 +320,27 @@ function createApp(deps) {
   });
 
   // Proxy HeyGen avatar list so the console can look up IDs without exposing the key.
+  // Merges stock avatars (/v2/avatars) + personal/custom avatars (/v2/avatars?include_private=true).
   app.get('/api/heygen/avatars', requireAuth, async (req, res) => {
     try {
       const key = config.heygen && config.heygen.apiKey;
       if (!key) return res.status(503).json({ error: 'HEYGEN_API_KEY not configured' });
-      const r = await fetch('https://api.heygen.com/v2/avatars', { headers: { 'X-Api-Key': key } });
-      const body = await r.json();
-      res.json(body);
+      const headers = { 'X-Api-Key': key };
+      const [stockRes, privateRes] = await Promise.all([
+        fetch('https://api.heygen.com/v2/avatars', { headers }),
+        fetch('https://api.heygen.com/v2/avatars?include_private=true', { headers }),
+      ]);
+      const [stockBody, privateBody] = await Promise.all([stockRes.json(), privateRes.json()]);
+      const stockAvatars = stockBody?.data?.avatars || [];
+      const privateAvatars = privateBody?.data?.avatars || [];
+      // Merge, deduplicate by avatar_id, personal avatars first so they're easy to find.
+      const seen = new Set();
+      const merged = [...privateAvatars, ...stockAvatars].filter(a => {
+        if (seen.has(a.avatar_id)) return false;
+        seen.add(a.avatar_id);
+        return true;
+      });
+      res.json({ error: null, data: { avatars: merged } });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
