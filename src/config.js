@@ -48,6 +48,13 @@ const config = {
       : path.join(__dirname, '..', 'data', 'social.db'),
   },
 
+  heygen: {
+    apiKey: process.env.HEYGEN_API_KEY || '',
+    avatarId: process.env.HEYGEN_AVATAR_ID || '',
+    voiceIdEn: process.env.HEYGEN_VOICE_ID_EN || '',
+    voiceIdEs: process.env.HEYGEN_VOICE_ID_ES || '',
+  },
+
   brands: BRANDS,
 };
 
@@ -67,6 +74,7 @@ function validate() {
   }
   if (!config.buffer.apiKey) warnings.push('BUFFER_API_KEY not set — posting to Buffer is disabled until provided.');
   if (!config.anthropic.apiKey) warnings.push('ANTHROPIC_API_KEY not set — drafter falls back to the heuristic formatter.');
+  if (!config.heygen.apiKey) warnings.push('HEYGEN_API_KEY not set — HeyGen video generation is disabled until provided.');
   return { fatal, warnings };
 }
 

@@ -14,6 +14,7 @@ const DDL = [
     auto_publish INTEGER NOT NULL DEFAULT 0, ai_draft INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'drafted',
     channel_ids TEXT NOT NULL DEFAULT '[]', buffer_post_ids TEXT NOT NULL DEFAULT '{}',
     scheduling_mode TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, calendar_key TEXT,
+    media_type TEXT, detected_ratio TEXT, eligible_destinations TEXT NOT NULL DEFAULT '[]', source TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   )`,
   // Idempotent column adds for the already-created production table.
@@ -22,6 +23,7 @@ const DDL = [
   `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS media_type TEXT`,
   `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS detected_ratio TEXT`,
   `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS eligible_destinations TEXT NOT NULL DEFAULT '[]'`,
+  `ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS source TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_social_posts_state ON social_posts(state)`,
   `CREATE INDEX IF NOT EXISTS idx_social_posts_calkey ON social_posts(calendar_key)`,
   `CREATE TABLE IF NOT EXISTS human_post_queue (
@@ -59,6 +61,25 @@ const DDL = [
     metrics_json TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (post_id, channel_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS heygen_jobs (
+    id TEXT PRIMARY KEY,
+    heygen_video_id TEXT NOT NULL,
+    brand TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    avatar_id TEXT NOT NULL,
+    voice_id TEXT NOT NULL,
+    language TEXT NOT NULL DEFAULT 'en',
+    script TEXT NOT NULL,
+    aspect_ratio TEXT NOT NULL DEFAULT '9:16',
+    status TEXT NOT NULL DEFAULT 'rendering',
+    video_url TEXT,
+    duration_sec REAL,
+    error TEXT,
+    post_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_heygen_jobs_status ON heygen_jobs(status)`,
 ];
 
 function placeholders(n, start = 1) {
@@ -284,6 +305,50 @@ class PgStore {
 
   async listAllPostMetrics() {
     const { rows } = await this.pool.query('SELECT * FROM post_metrics ORDER BY post_id, channel_id');
+    return rows;
+  }
+
+  // ── heygen_jobs ──────────────────────────────────────────────────────────
+  async createHeygenJob(input) {
+    const ts = nowIso();
+    const id = input.id || newId();
+    await this.pool.query(
+      `INSERT INTO heygen_jobs (id, heygen_video_id, brand, brief, avatar_id, voice_id, language, script, aspect_ratio, status, video_url, duration_sec, error, post_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'rendering', NULL, NULL, NULL, NULL, $10, $10)`,
+      [id, input.heygen_video_id, input.brand, input.brief || '', input.avatar_id, input.voice_id,
+       input.language || 'en', input.script, input.aspect_ratio || '9:16', ts]
+    );
+    return this._one('SELECT * FROM heygen_jobs WHERE id = $1', [id]);
+  }
+
+  async getHeygenJob(id) {
+    return this._one('SELECT * FROM heygen_jobs WHERE id = $1', [id]);
+  }
+
+  async updateHeygenJob(id, patch) {
+    const keys = Object.keys(patch);
+    if (!keys.length) return;
+    const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
+    const vals = [id, ...keys.map((k) => patch[k])];
+    const ts = nowIso();
+    await this.pool.query(
+      `UPDATE heygen_jobs SET ${sets}, updated_at = $${vals.length + 1} WHERE id = $1`,
+      [...vals, ts]
+    );
+  }
+
+  async listHeygenJobs({ status, limit = 50 } = {}) {
+    if (status) {
+      const { rows } = await this.pool.query(
+        'SELECT * FROM heygen_jobs WHERE status = $1 ORDER BY created_at DESC LIMIT $2',
+        [status, limit]
+      );
+      return rows;
+    }
+    const { rows } = await this.pool.query(
+      'SELECT * FROM heygen_jobs ORDER BY created_at DESC LIMIT $1',
+      [limit]
+    );
     return rows;
   }
 

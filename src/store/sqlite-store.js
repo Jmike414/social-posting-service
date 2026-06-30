@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS social_posts (
   auto_publish INTEGER NOT NULL DEFAULT 0, ai_draft INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'drafted',
   channel_ids TEXT NOT NULL DEFAULT '[]', buffer_post_ids TEXT NOT NULL DEFAULT '{}',
   scheduling_mode TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, calendar_key TEXT,
+  media_type TEXT, detected_ratio TEXT, eligible_destinations TEXT NOT NULL DEFAULT '[]', source TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_social_posts_state ON social_posts(state);
@@ -55,6 +56,25 @@ CREATE TABLE IF NOT EXISTS post_metrics (
   metrics_json TEXT NOT NULL DEFAULT '[]',
   PRIMARY KEY (post_id, channel_id)
 );
+CREATE TABLE IF NOT EXISTS heygen_jobs (
+  id TEXT PRIMARY KEY,
+  heygen_video_id TEXT NOT NULL,
+  brand TEXT NOT NULL,
+  brief TEXT NOT NULL,
+  avatar_id TEXT NOT NULL,
+  voice_id TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'en',
+  script TEXT NOT NULL,
+  aspect_ratio TEXT NOT NULL DEFAULT '9:16',
+  status TEXT NOT NULL DEFAULT 'rendering',
+  video_url TEXT,
+  duration_sec REAL,
+  error TEXT,
+  post_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_heygen_jobs_status ON heygen_jobs(status);
 `;
 
 class SqliteStore {
@@ -79,6 +99,7 @@ class SqliteStore {
     try { this.db.exec('ALTER TABLE social_posts ADD COLUMN media_type TEXT'); } catch { /* already exists */ }
     try { this.db.exec('ALTER TABLE social_posts ADD COLUMN detected_ratio TEXT'); } catch { /* already exists */ }
     try { this.db.exec("ALTER TABLE social_posts ADD COLUMN eligible_destinations TEXT NOT NULL DEFAULT '[]'"); } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE social_posts ADD COLUMN source TEXT'); } catch { /* already exists */ }
     return this;
   }
 
@@ -278,6 +299,55 @@ class SqliteStore {
 
   async listAllPostMetrics() {
     return this.db.prepare('SELECT * FROM post_metrics ORDER BY post_id, channel_id').all();
+  }
+
+  // ── heygen_jobs ──────────────────────────────────────────────────────────
+  async createHeygenJob(input) {
+    const ts = nowIso();
+    const row = {
+      id: input.id || newId(),
+      heygen_video_id: input.heygen_video_id,
+      brand: input.brand,
+      brief: input.brief || '',
+      avatar_id: input.avatar_id,
+      voice_id: input.voice_id,
+      language: input.language || 'en',
+      script: input.script,
+      aspect_ratio: input.aspect_ratio || '9:16',
+      status: 'rendering',
+      video_url: null,
+      duration_sec: null,
+      error: null,
+      post_id: null,
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db.prepare(
+      `INSERT INTO heygen_jobs (id, heygen_video_id, brand, brief, avatar_id, voice_id, language, script, aspect_ratio, status, video_url, duration_sec, error, post_id, created_at, updated_at)
+       VALUES (@id, @heygen_video_id, @brand, @brief, @avatar_id, @voice_id, @language, @script, @aspect_ratio, @status, @video_url, @duration_sec, @error, @post_id, @created_at, @updated_at)`
+    ).run(row);
+    return this.db.prepare('SELECT * FROM heygen_jobs WHERE id = ?').get(row.id);
+  }
+
+  async getHeygenJob(id) {
+    return this.db.prepare('SELECT * FROM heygen_jobs WHERE id = ?').get(id) || null;
+  }
+
+  async updateHeygenJob(id, patch) {
+    const sets = [];
+    const vals = { id, updated_at: nowIso() };
+    for (const [k, v] of Object.entries(patch)) {
+      sets.push(`${k} = @${k}`); vals[k] = v;
+    }
+    sets.push('updated_at = @updated_at');
+    this.db.prepare(`UPDATE heygen_jobs SET ${sets.join(', ')} WHERE id = @id`).run(vals);
+  }
+
+  async listHeygenJobs({ status, limit = 50 } = {}) {
+    if (status) {
+      return this.db.prepare('SELECT * FROM heygen_jobs WHERE status = ? ORDER BY created_at DESC LIMIT ?').all(status, limit);
+    }
+    return this.db.prepare('SELECT * FROM heygen_jobs ORDER BY created_at DESC LIMIT ?').all(limit);
   }
 
   async close() {

@@ -20,6 +20,8 @@ const scheduler = require('./scheduler/scheduler');
 const { fetchAndStoreMetrics } = require('./metrics/MetricsFetcher');
 const bufferClient = require('./publisher/buffer-client');
 const { STATES, canTransition } = require('./state');
+const heygenClient = require('./heygen/heygen-client');
+const { pollJob: heygenPollJob, resumePendingJobs: heygenResume } = require('./heygen/render-poller');
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -263,6 +265,60 @@ function createApp(deps) {
     res.json({ metrics });
   });
 
+  // ── HeyGen ──────────────────────────────────────────────────────────────────
+  // Returns configured avatar/voice IDs for the console form (never the API key).
+  app.get('/api/heygen/config', requireAuth, (req, res) => {
+    res.json({
+      avatarId: config.heygen.avatarId || '',
+      voiceIdEn: config.heygen.voiceIdEn || '',
+      voiceIdEs: config.heygen.voiceIdEs || '',
+    });
+  });
+
+  // Manually fire a HeyGen video generation.
+  app.post('/api/heygen/generate', requireAuth, async (req, res) => {
+    const { brand, script, brief, avatarId, voiceId, language, aspectRatio } = req.body || {};
+    if (!isBrand(brand)) return res.status(400).json({ error: 'invalid brand' });
+    if (!String(script || '').trim()) return res.status(400).json({ error: 'script is required' });
+    if (!avatarId) return res.status(400).json({ error: 'avatar_id is required' });
+    if (!voiceId) return res.status(400).json({ error: 'voice_id is required' });
+
+    try {
+      const scriptText = String(script).trim();
+      const data = await heygenClient.createVideo({
+        avatarId,
+        voiceId,
+        script: scriptText,
+        aspectRatio: aspectRatio || '9:16',
+      });
+      const job = await store.createHeygenJob({
+        heygen_video_id: data.video_id,
+        brand,
+        brief: brief || scriptText.slice(0, 120),
+        avatar_id: avatarId,
+        voice_id: voiceId,
+        language: language || 'en',
+        script: scriptText,
+        aspect_ratio: aspectRatio || '9:16',
+      });
+      heygenPollJob(job.id, deps).catch((e) => logger.error(`HeyGen poll ${job.id}: ${e.message}`));
+      res.status(201).json({ job_id: job.id, heygen_video_id: data.video_id, status: 'rendering' });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/heygen/jobs', requireAuth, async (req, res) => {
+    const jobs = await store.listHeygenJobs({ limit: 50 });
+    res.json({ jobs });
+  });
+
+  app.get('/api/heygen/jobs/:id', requireAuth, async (req, res) => {
+    const job = await store.getHeygenJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'not found' });
+    res.json(job);
+  });
+
   // Resolve a live link for a published post (best-effort; Buffer hosts the post).
   function publicPost(p) {
     return {
@@ -281,6 +337,7 @@ function createApp(deps) {
       media_type: p.media_type || null,
       detected_ratio: p.detected_ratio || null,
       eligible_destinations: p.eligible_destinations || [],
+      source: p.source || null,
       created_at: p.created_at,
       updated_at: p.updated_at,
     };
@@ -315,6 +372,7 @@ async function start() {
     catch (e) { logger.error(`Background metrics fetch failed: ${e.message}`); }
   }, 60 * 60 * 1000);
   if (metricsInterval.unref) metricsInterval.unref();
+  heygenResume(deps).catch((e) => logger.error(`HeyGen resume error: ${e.message}`));
   app.listen(config.port, () => {
     logger.info(`social-posting-service listening on :${config.port} (public: ${config.publicBaseUrl})`);
   });

@@ -159,11 +159,50 @@
       </div>
       <div id="schedResults" style="margin-top:14px"></div>
     </section>
+
+    <!-- HEYGEN -->
+    <section class="view" id="v-heygen">
+      <h3 style="font-size:14px;color:var(--muted);margin:0 0 14px">Generate HeyGen Video</h3>
+
+      <label>Brand</label>
+      <div class="seg" id="hgBrandSeg">
+        <button type="button" data-b="propzombie" class="on">PropZombie</button>
+        <button type="button" data-b="crewmando">CrewMando</button>
+      </div>
+
+      <label>Language</label>
+      <select id="hgLang">
+        <option value="en">English (EN)</option>
+        <option value="es">Spanish (ES)</option>
+      </select>
+
+      <label>Script / Copy</label>
+      <textarea id="hgScript" placeholder="Enter the spoken script. This becomes the audio narration and the initial post copy."></textarea>
+
+      <label>Brief override <span style="color:var(--muted);font-size:11px">(optional — defaults to first 120 chars of script)</span></label>
+      <input id="hgBrief" type="text" placeholder="Optional brief description" />
+
+      <label>Avatar ID</label>
+      <input id="hgAvatarId" type="text" placeholder="HeyGen avatar_id (from dashboard)" />
+
+      <label>Voice ID</label>
+      <input id="hgVoiceId" type="text" placeholder="HeyGen voice_id (auto-filled by language)" />
+
+      <button class="btn" id="hgGenerate">Generate Video</button>
+      <div class="err" id="hgErr" style="margin-top:10px"></div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px">
+        <h3 style="font-size:14px;color:var(--muted);margin:0">Jobs</h3>
+        <button class="btn sec" id="hgRefresh" style="padding:8px 14px;font-size:13px;margin:0;width:auto">↻ Refresh</button>
+      </div>
+      <div id="hgJobList"></div>
+    </section>
   </main>
 
   <nav>
     <button class="on" data-view="compose"><span class="ico">✎</span>Compose</button>
     <button data-view="review"><span class="ico">✓</span>Review <span id="reviewCount"></span></button>
+    <button data-view="heygen"><span class="ico">🎬</span>HeyGen</button>
     <button data-view="schedule"><span class="ico">📅</span>Schedule</button>
     <button data-view="status"><span class="ico">📡</span>Status</button>
   </nav>
@@ -284,6 +323,7 @@
       document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
       if (v === 'review') loadReview();
       if (v === 'status') loadStatus();
+      if (v === 'heygen') { loadHeygenConfig(); loadHeygenJobs(); }
     }
 
     $('#logout').addEventListener('click', async () => { await fetch('/logout', { method: 'POST' }); location.href = '/login'; });
@@ -481,6 +521,99 @@
         ${it.reason ? `<div class="meta" style="color:var(--amber)">${esc(it.reason)}</div>` : ''}
       </div>`;
     }
+
+    // ── HeyGen tab ─────────────────────────────────────────────────────────
+    const hg = { brand: 'propzombie' };
+    const HG_VOICES = {};  // populated from /api/heygen/config
+
+    $('#hgBrandSeg').addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      hg.brand = b.dataset.b;
+      [...$('#hgBrandSeg').children].forEach((c) => c.classList.toggle('on', c === b));
+    });
+
+    // Auto-fill voice ID when language changes.
+    $('#hgLang').addEventListener('change', () => {
+      const lang = $('#hgLang').value;
+      const id = lang === 'es' ? HG_VOICES.voiceIdEs : HG_VOICES.voiceIdEn;
+      if (id) $('#hgVoiceId').value = id;
+    });
+
+    async function loadHeygenConfig() {
+      try {
+        const r = await fetch('/api/heygen/config');
+        if (!r.ok) return;
+        const cfg = await r.json();
+        HG_VOICES.voiceIdEn = cfg.voiceIdEn || '';
+        HG_VOICES.voiceIdEs = cfg.voiceIdEs || '';
+        if (cfg.avatarId && !$('#hgAvatarId').value) $('#hgAvatarId').value = cfg.avatarId;
+        if (cfg.voiceIdEn && !$('#hgVoiceId').value) $('#hgVoiceId').value = cfg.voiceIdEn;
+      } catch { /* config endpoint not critical */ }
+    }
+
+    async function loadHeygenJobs() {
+      const el = $('#hgJobList');
+      try {
+        const r = await fetch('/api/heygen/jobs');
+        if (!r.ok) { el.innerHTML = '<div class="err">Failed to load jobs</div>'; return; }
+        const { jobs } = await r.json();
+        if (!jobs.length) { el.innerHTML = '<div class="empty">No jobs yet.</div>'; return; }
+        el.innerHTML = jobs.map(hgJobCard).join('');
+      } catch { el.innerHTML = '<div class="err">Network error</div>'; }
+    }
+
+    function hgJobCard(j) {
+      const statusColor = j.status === 'completed' ? 's-published' : j.status === 'failed' ? 's-failed' : 's-queued';
+      const dur = j.duration_sec ? ` · ${Math.round(j.duration_sec)}s` : '';
+      const postLink = j.post_id ? ` · <a href="#" onclick="switchView('review');return false">→ Review</a>` : '';
+      return `<div class="card">
+        <div class="meta">
+          <span class="pill brand-${esc(j.brand)}">${esc(j.brand)}</span>
+          <span class="pill ${statusColor}">${esc(j.status)}</span>
+          <span class="pill">${esc(j.language || 'en')}</span>
+          ${j.status === 'completed' ? `<span class="pill">${esc(j.aspect_ratio || '9:16')}${dur}</span>` : ''}
+        </div>
+        <div class="copy" style="margin-top:8px;font-size:13px">${esc((j.script || '').slice(0, 120))}${(j.script || '').length > 120 ? '…' : ''}</div>
+        <div class="meta">${new Date(j.created_at).toLocaleString()}${postLink}</div>
+        ${j.error ? `<div class="err" style="margin-top:6px">${esc(j.error)}</div>` : ''}
+      </div>`;
+    }
+
+    $('#hgGenerate').addEventListener('click', async () => {
+      const err = $('#hgErr'); err.textContent = '';
+      const script = $('#hgScript').value.trim();
+      const avatarId = $('#hgAvatarId').value.trim();
+      const voiceId = $('#hgVoiceId').value.trim();
+      if (!script) { err.textContent = 'Script is required.'; return; }
+      if (!avatarId) { err.textContent = 'Avatar ID is required.'; return; }
+      if (!voiceId) { err.textContent = 'Voice ID is required.'; return; }
+
+      $('#hgGenerate').disabled = true;
+      try {
+        const r = await fetch('/api/heygen/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            brand: hg.brand,
+            script,
+            brief: $('#hgBrief').value.trim() || undefined,
+            avatarId,
+            voiceId,
+            language: $('#hgLang').value,
+            aspectRatio: '9:16',
+          }),
+        });
+        const j = await r.json();
+        if (!r.ok) { err.textContent = j.error || 'Generation failed'; return; }
+        $('#hgScript').value = ''; $('#hgBrief').value = '';
+        toast('Rendering started — check Jobs below');
+        loadHeygenJobs();
+      } finally {
+        $('#hgGenerate').disabled = false;
+      }
+    });
+
+    $('#hgRefresh').addEventListener('click', loadHeygenJobs);
   </script>
 </body>
 </html>

@@ -66,6 +66,7 @@ function postInsertValues(input, ts) {
     media_type: input.media_type ?? null,
     detected_ratio: input.detected_ratio ?? null,
     eligible_destinations: JSON.stringify(input.eligible_destinations || []),
+    source: input.source ?? null,
     created_at: ts,
     updated_at: ts,
   };
@@ -87,7 +88,7 @@ function applyPostPatch(current, patch, ts) {
 const POST_COLUMNS = [
   'id', 'brand', 'destination', 'brief', 'copy', 'image_path', 'image_alt', 'intended_post_time',
   'auto_publish', 'ai_draft', 'state', 'channel_ids', 'buffer_post_ids', 'scheduling_mode', 'attempts', 'error',
-  'calendar_key', 'media_type', 'detected_ratio', 'eligible_destinations', 'created_at', 'updated_at',
+  'calendar_key', 'media_type', 'detected_ratio', 'eligible_destinations', 'source', 'created_at', 'updated_at',
 ];
 
 // ── scheduled_posts (the auto-scheduler's own table; plain columns, no JSON) ──
