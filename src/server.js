@@ -17,6 +17,8 @@ const { BufferPublisher } = require('./publisher/BufferPublisher');
 const { enqueue } = require('./enqueue');
 const worker = require('./worker');
 const scheduler = require('./scheduler/scheduler');
+const { fetchAndStoreMetrics } = require('./metrics/MetricsFetcher');
+const bufferClient = require('./publisher/buffer-client');
 const { STATES, canTransition } = require('./state');
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
@@ -246,6 +248,20 @@ function createApp(deps) {
     }
   });
 
+  // ── Metrics ──────────────────────────────────────────────────────────────────
+  app.post('/api/metrics/fetch', requireAuth, async (req, res) => {
+    try {
+      const result = await fetchAndStoreMetrics({ store, client: bufferClient });
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/metrics', requireAuth, async (req, res) => {
+    const metrics = await store.listAllPostMetrics();
+    res.json({ metrics });
+  });
 
   // Resolve a live link for a published post (best-effort; Buffer hosts the post).
   function publicPost(p) {
@@ -294,6 +310,11 @@ async function start() {
   const app = createApp(deps);
   const workerHandle = worker.startWorker(deps, { intervalMs: 1500 });
   deps.nudge = workerHandle.nudge; // route nudge() through the running-flag tick
+  const metricsInterval = setInterval(async () => {
+    try { await fetchAndStoreMetrics({ store: deps.store, client: bufferClient }); }
+    catch (e) { logger.error(`Background metrics fetch failed: ${e.message}`); }
+  }, 60 * 60 * 1000);
+  if (metricsInterval.unref) metricsInterval.unref();
   app.listen(config.port, () => {
     logger.info(`social-posting-service listening on :${config.port} (public: ${config.publicBaseUrl})`);
   });

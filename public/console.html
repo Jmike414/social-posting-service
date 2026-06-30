@@ -57,6 +57,9 @@
     .warn { background:var(--card2); color:var(--fg); }
     .danger { background:var(--red); color:#fff; }
     .err { color:var(--red); font-size:13px; }
+    .metrics { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+    .m-val { font-size:12px; padding:3px 8px; border-radius:999px; background:rgba(59,130,246,.1); color:#93c5fd; }
+    .m-zero { color:var(--muted); }
     .editbox { width:100%; margin-top:10px; }
     nav { position:fixed; bottom:0; left:0; right:0; display:flex; background:var(--card); border-top:1px solid var(--line); }
     nav button { flex:1; padding:12px 0 16px; background:none; border:0; color:var(--muted); font-size:12px; display:flex;
@@ -373,24 +376,53 @@
 
     // Status
     async function loadStatus() {
-      const r = await fetch('/api/status');
-      const { recent, manual } = await r.json();
+      const [statusRes, metricsRes] = await Promise.all([
+        fetch('/api/status'),
+        fetch('/api/metrics'),
+      ]);
+      const { recent, manual } = await statusRes.json();
+      const { metrics: allMetrics } = await metricsRes.json();
+      const metricsMap = {};
+      for (const m of (allMetrics || [])) {
+        if (!metricsMap[m.post_id]) metricsMap[m.post_id] = [];
+        metricsMap[m.post_id].push(m);
+      }
       const el = $('#statusList');
       let html = '';
-      if (manual.length) {
+      if (manual && manual.length) {
         html += '<h3 style="font-size:14px;color:var(--muted)">Manual post queue</h3>';
         html += manual.map(manualCard).join('');
       }
-      html += '<h3 style="font-size:14px;color:var(--muted)">Recent</h3>';
-      html += recent.length ? recent.map(statusCard).join('') : '<div class="empty">No posts yet.</div>';
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><h3 style="font-size:14px;color:var(--muted);margin:0">Recent</h3><button class="btn sec" id="refreshMetrics" style="padding:8px 14px;font-size:13px;margin:0;width:auto">↻ Metrics</button></div>';
+      html += recent && recent.length ? recent.map((p) => statusCard(p, metricsMap[p.id] || [])).join('') : '<div class="empty">No posts yet.</div>';
       el.innerHTML = html;
+      document.getElementById('refreshMetrics').addEventListener('click', async () => {
+        document.getElementById('refreshMetrics').textContent = '…';
+        await fetch('/api/metrics/fetch', { method: 'POST' });
+        loadStatus();
+      });
     }
-    function statusCard(p) {
+    function statusCard(p, metricsRows) {
       const ids = Object.values(p.buffer_post_ids || {});
+      let metricsHtml = '';
+      for (const m of (metricsRows || [])) {
+        let parsed = [];
+        try { parsed = JSON.parse(m.metrics_json || '[]'); } catch { /* ignore */ }
+        const get = (type) => { const r = parsed.find((x) => x.type === type); return r ? r.value : null; };
+        const imp = get('impressions'); const likes = get('likes'); const eng = get('engagementRate');
+        const shares = get('shares'); const clicks = get('clicks');
+        if (imp !== null || likes !== null) {
+          const fmt = (v, label) => v !== null ? `<span class="m-val${v === 0 ? ' m-zero' : ''}">${v} ${label}</span>` : '';
+          const engFmt = eng !== null ? `<span class="m-val${eng === 0 ? ' m-zero' : ''}">${eng}% eng</span>` : '';
+          const upd = m.metrics_updated_at ? `<span class="m-val m-zero">${new Date(m.metrics_updated_at).toLocaleDateString()}</span>` : '';
+          metricsHtml += `<div class="metrics">${fmt(imp,'imp')}${fmt(likes,'♥')}${engFmt}${fmt(shares,'↗')}${fmt(clicks,'↙')}${upd}</div>`;
+        }
+      }
       return `<div class="card">
         <div class="meta"><span class="pill brand-${p.brand}">${p.brand}</span><span class="pill s-${p.state}">${p.state}</span></div>
         <div class="copy" style="margin-top:8px">${esc(p.copy || p.brief)}</div>
         ${ids.length ? `<div class="meta">Buffer: ${ids.map(esc).join(', ')}</div>` : ''}
+        ${metricsHtml}
         ${p.state === 'failed' && p.error ? `<div class="err" style="margin-top:8px">${esc(p.error)}</div>` : ''}
       </div>`;
     }
