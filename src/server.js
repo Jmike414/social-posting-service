@@ -319,6 +319,19 @@ function createApp(deps) {
     res.json(job);
   });
 
+  // Proxy HeyGen avatar list so the console can look up IDs without exposing the key.
+  app.get('/api/heygen/avatars', requireAuth, async (req, res) => {
+    try {
+      const key = config.heygen && config.heygen.apiKey;
+      if (!key) return res.status(503).json({ error: 'HEYGEN_API_KEY not configured' });
+      const r = await fetch('https://api.heygen.com/v2/avatars', { headers: { 'X-Api-Key': key } });
+      const body = await r.json();
+      res.json(body);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Resolve a live link for a published post (best-effort; Buffer hosts the post).
   function publicPost(p) {
     return {
